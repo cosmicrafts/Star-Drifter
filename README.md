@@ -23,4 +23,4 @@ cargo build --release
 
 ## Development
 
-This project uses Bevy 0.12 for game development.
+This project uses Bevy 0.17.3 for game development.

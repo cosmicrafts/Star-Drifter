@@ -26,13 +26,12 @@ impl Plugin for SectorPlugin {
 pub struct SectorMap {
     pub current_sector_id: u32,
     pub sectors: HashMap<u32, Sector>,
-    pub next_sector_id: u32,
     pub distance_traveled: u32, // For scaling difficulty
 }
 
 #[derive(Clone)]
 pub struct Sector {
-    pub id: u32,
+    pub _id: u32,
     pub sector_type: SectorType,
     pub name: String,
     pub description: String,
@@ -93,7 +92,7 @@ pub struct SectorEvent {
     pub event_type: EventType,
     pub description: String,
     pub faction: Option<Faction>,
-    pub triggered: bool,
+    pub _triggered: bool,
 }
 
 #[derive(Clone)]
@@ -107,19 +106,16 @@ pub enum EventType {
 
 #[derive(Component)]
 pub struct MapNode {
-    pub sector_id: u32,
-    pub position: Vec2,
+    pub _sector_id: u32,
 }
 
 #[derive(Component)]
 pub struct NodeLabel {
-    pub sector_id: u32,
+    pub _sector_id: u32,
 }
 
 #[derive(Component)]
 pub struct ConnectionLine {
-    pub from_sector: u32,
-    pub to_sector: u32,
 }
 
 #[derive(Resource)]
@@ -198,7 +194,6 @@ fn setup_sector_map(mut commands: Commands) {
     commands.insert_resource(SectorMap {
         current_sector_id: 0,
         sectors,
-        next_sector_id: next_id,
         distance_traveled: 0,
     });
 }
@@ -227,7 +222,7 @@ fn generate_sector(
     }
     
     Sector {
-        id,
+        _id: id,
         sector_type,
         name,
         description,
@@ -238,59 +233,6 @@ fn generate_sector(
     }
 }
 
-fn ensure_sector_exists(
-    sector_map: &mut SectorMap,
-    sector_id: u32,
-    rng: &mut rand::rngs::ThreadRng,
-) {
-    if !sector_map.sectors.contains_key(&sector_id) {
-        let distance = sector_map.distance_traveled;
-        let sector_type = generate_random_sector_type(rng, distance);
-        let sector = generate_sector(sector_id, sector_type, rng, distance);
-        sector_map.sectors.insert(sector_id, sector);
-    }
-}
-
-fn generate_connections_for_sector(
-    sector_map: &mut SectorMap,
-    sector_id: u32,
-    rng: &mut rand::rngs::ThreadRng,
-) {
-    let needs_connections = sector_map.sectors
-        .get(&sector_id)
-        .map(|s| s.connections.is_empty())
-        .unwrap_or(false);
-    
-    if needs_connections {
-        // Generate 1-3 new connected sectors
-        let num_connections = rng.gen_range(1..=3);
-        let mut new_sector_ids = Vec::new();
-        
-        // First, collect all new sector IDs we need to create
-        for _ in 0..num_connections {
-            let new_sector_id = sector_map.next_sector_id;
-            sector_map.next_sector_id += 1;
-            new_sector_ids.push(new_sector_id);
-        }
-        
-        // Generate all new sectors first
-        for &new_sector_id in &new_sector_ids {
-            ensure_sector_exists(sector_map, new_sector_id, rng);
-        }
-        
-        // Now add connections (bidirectional)
-        if let Some(sector) = sector_map.sectors.get_mut(&sector_id) {
-            sector.connections = new_sector_ids.clone();
-        }
-        
-        // Add reverse connections
-        for &new_sector_id in &new_sector_ids {
-            if let Some(connected_sector) = sector_map.sectors.get_mut(&new_sector_id) {
-                connected_sector.connections.push(sector_id);
-            }
-        }
-    }
-}
 
 fn generate_random_sector_type(rng: &mut rand::rngs::ThreadRng, distance: u32) -> SectorType {
     // Scale rarity with distance traveled
@@ -375,7 +317,7 @@ fn generate_sector_events(sector_type: &SectorType, rng: &mut rand::rngs::Thread
                 event_type: EventType::Encounter,
                 description: format!("A {} {} ship blocks your path!", faction.name(), format!("{:?}", ship_class)),
                 faction: Some(faction),
-                triggered: false,
+                _triggered: false,
             });
         }
         SectorType::Distress => {
@@ -384,14 +326,14 @@ fn generate_sector_events(sector_type: &SectorType, rng: &mut rand::rngs::Thread
                     event_type: EventType::Opportunity,
                     description: "A damaged ship requests assistance.".to_string(),
                     faction: None,
-                    triggered: false,
+                    _triggered: false,
                 });
             } else {
                 events.push(SectorEvent {
                     event_type: EventType::Hazard,
                     description: "The distress signal is a trap!".to_string(),
                     faction: Some(Faction::Spirats),
-                    triggered: false,
+                    _triggered: false,
                 });
             }
         }
@@ -400,7 +342,7 @@ fn generate_sector_events(sector_type: &SectorType, rng: &mut rand::rngs::Thread
                 event_type: EventType::Discovery,
                 description: "Rare Aetherium crystals detected! Mining could be profitable but dangerous.".to_string(),
                 faction: None,
-                triggered: false,
+                _triggered: false,
             });
         }
         SectorType::CelestialSite => {
@@ -408,7 +350,7 @@ fn generate_sector_events(sector_type: &SectorType, rng: &mut rand::rngs::Thread
                 event_type: EventType::Story,
                 description: "Ancient Celestial ruins pulse with mysterious energy.".to_string(),
                 faction: Some(Faction::Celestials),
-                triggered: false,
+                _triggered: false,
             });
         }
         _ => {
@@ -419,7 +361,7 @@ fn generate_sector_events(sector_type: &SectorType, rng: &mut rand::rngs::Thread
                     event_type: EventType::Encounter,
                     description: format!("You encounter a {} patrol.", faction.name()),
                     faction: Some(faction),
-                    triggered: false,
+                    _triggered: false,
                 });
             }
         }
@@ -435,11 +377,11 @@ fn calculate_danger_level(distance: u32, sector_type: &SectorType) -> u32 {
 }
 
 fn handle_sector_navigation(
-    keyboard: Res<Input<KeyCode>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut sector_map: ResMut<SectorMap>,
     mut game_data: ResMut<crate::game::GameData>,
-    mut event_writer: EventWriter<crate::events::GameEvent>,
-    mut active_event: ResMut<crate::events::ActiveEvent>,
+    mut event_writer: MessageWriter<crate::events::GameEvent>,
+    active_event: ResMut<crate::events::ActiveEvent>,
     input_consumed: Res<crate::events::InputConsumed>,
 ) {
     // Don't allow navigation if an event is currently active
@@ -454,15 +396,15 @@ fn handle_sector_navigation(
         // Handle navigation to connected sectors using number keys 1-9
         for (i, &target_id) in connections.iter().enumerate() {
             let key = match i {
-                0 => KeyCode::Key1,
-                1 => KeyCode::Key2,
-                2 => KeyCode::Key3,
-                3 => KeyCode::Key4,
-                4 => KeyCode::Key5,
-                5 => KeyCode::Key6,
-                6 => KeyCode::Key7,
-                7 => KeyCode::Key8,
-                8 => KeyCode::Key9,
+                0 => KeyCode::Digit1,
+                1 => KeyCode::Digit2,
+                2 => KeyCode::Digit3,
+                3 => KeyCode::Digit4,
+                4 => KeyCode::Digit5,
+                5 => KeyCode::Digit6,
+                6 => KeyCode::Digit7,
+                7 => KeyCode::Digit8,
+                8 => KeyCode::Digit9,
                 _ => continue,
             };
             
@@ -489,7 +431,7 @@ fn try_travel_to_sector(
     sector_map: &mut SectorMap,
     game_data: &mut crate::game::GameData,
     target_sector_id: u32,
-    event_writer: &mut EventWriter<events::GameEvent>,
+    event_writer: &mut MessageWriter<events::GameEvent>,
     mut active_event: ResMut<events::ActiveEvent>,
 ) {
     // Check fuel
@@ -525,9 +467,6 @@ fn try_travel_to_sector(
 
 
 // Helper function to get current sector (for UI)
-pub fn get_current_sector(sector_map: &SectorMap) -> Option<&Sector> {
-    sector_map.sectors.get(&sector_map.current_sector_id)
-}
 
 // Visual map system
 fn setup_map_visual(mut commands: Commands) {
@@ -555,29 +494,25 @@ fn update_map_visual(
             if let Some(&pos) = positions.get(sector_id) {
                 let is_current = *sector_id == sector_map.current_sector_id;
                 let color = if is_current {
-                    Color::rgb(0.0, 1.0, 0.0) // Green for current
+                    Color::srgb(0.0, 1.0, 0.0) // Green for current
                 } else if sector.visited {
-                    Color::rgb(0.5, 0.5, 0.5) // Gray for visited
+                    Color::srgb(0.5, 0.5, 0.5) // Gray for visited
                 } else {
-                    Color::rgb(0.8, 0.8, 0.8) // White for unvisited
+                    Color::srgb(0.8, 0.8, 0.8) // White for unvisited
                 };
                 
                 let size = if is_current { 15.0 } else { 10.0 };
                 
                 let node_entity = commands.spawn((
                     MapNode {
-                        sector_id: *sector_id,
-                        position: pos,
+                        _sector_id: *sector_id,
                     },
-                    SpriteBundle {
-                        sprite: Sprite {
-                            color,
-                            custom_size: Some(Vec2::new(size, size)),
-                            ..default()
-                        },
-                        transform: Transform::from_translation(Vec3::new(pos.x, pos.y, 1.0)),
+                    Sprite {
+                        color,
+                        custom_size: Some(Vec2::new(size, size)),
                         ..default()
                     },
+                    Transform::from_translation(Vec3::new(pos.x, pos.y, 1.0)),
                 )).id();
                 
                 
@@ -588,11 +523,11 @@ fn update_map_visual(
             if let Some(&pos) = positions.get(sector_id) {
                 let is_current = *sector_id == sector_map.current_sector_id;
                 let color = if is_current {
-                    Color::rgb(0.0, 1.0, 0.0)
+                    Color::srgb(0.0, 1.0, 0.0)
                 } else if sector.visited {
-                    Color::rgb(0.5, 0.5, 0.5)
+                    Color::srgb(0.5, 0.5, 0.5)
                 } else {
-                    Color::rgb(0.8, 0.8, 0.8)
+                    Color::srgb(0.8, 0.8, 0.8)
                 };
                 
                 if let Ok((entity, _)) = node_query.get(*map_visual.node_entities.get(sector_id).unwrap()) {
@@ -619,19 +554,14 @@ fn update_map_visual(
         for (index, &connected_id) in current_sector.connections.iter().enumerate() {
             if let Some(&pos) = positions.get(&connected_id) {
                 commands.spawn((
-                    NodeLabel { sector_id: connected_id },
-                    Text2dBundle {
-                        text: Text::from_section(
-                            format!("{}", index + 1),
-                            TextStyle {
-                                font: default(),
-                                font_size: 20.0,
-                                color: Color::rgb(1.0, 1.0, 0.0),
-                            },
-                        ),
-                        transform: Transform::from_translation(Vec3::new(pos.x, pos.y - 25.0, 2.0)),
+                    NodeLabel { _sector_id: connected_id },
+                    Text2d::new(format!("{}", index + 1)),
+                    TextFont {
+                        font_size: 20.0,
                         ..default()
                     },
+                    TextColor(Color::srgb(1.0, 1.0, 0.0)),
+                    Transform::from_translation(Vec3::new(pos.x, pos.y - 25.0, 2.0)),
                 ));
             }
         }
@@ -666,20 +596,15 @@ fn update_map_visual(
                         
                         let line_entity = commands.spawn((
                             ConnectionLine {
-                                from_sector: *sector_id,
-                                to_sector: connected_id,
                             },
-                            SpriteBundle {
-                                sprite: Sprite {
-                                    color: Color::rgb(0.3, 0.3, 0.3),
-                                    custom_size: Some(Vec2::new(length, 2.0)),
-                                    ..default()
-                                },
-                                transform: Transform {
-                                    translation: Vec3::new(mid_point.x, mid_point.y, 0.0),
-                                    rotation: Quat::from_rotation_z(angle),
-                                    ..default()
-                                },
+                            Sprite {
+                                color: Color::srgb(0.3, 0.3, 0.3),
+                                custom_size: Some(Vec2::new(length, 2.0)),
+                                ..default()
+                            },
+                            Transform {
+                                translation: Vec3::new(mid_point.x, mid_point.y, 0.0),
+                                rotation: Quat::from_rotation_z(angle),
                                 ..default()
                             },
                         )).id();
@@ -742,11 +667,11 @@ fn handle_node_clicks(
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     node_query: Query<(Entity, &MapNode, &Transform)>,
-    mouse_button: Res<Input<MouseButton>>,
+    mouse_button: Res<ButtonInput<MouseButton>>,
     mut sector_map: ResMut<SectorMap>,
     mut game_data: ResMut<crate::game::GameData>,
-    mut event_writer: EventWriter<events::GameEvent>,
-    mut active_event: ResMut<events::ActiveEvent>,
+    mut event_writer: MessageWriter<events::GameEvent>,
+    active_event: ResMut<events::ActiveEvent>,
 ) {
     // Don't allow clicking nodes if an event is currently active
     if active_event.event.is_some() {
@@ -754,9 +679,9 @@ fn handle_node_clicks(
     }
     
     if mouse_button.just_pressed(MouseButton::Left) {
-        if let Ok(window) = windows.get_single() {
+        if let Ok(window) = windows.single() {
             if let Some(cursor_pos) = window.cursor_position() {
-                if let Ok((_camera, camera_transform)) = camera_query.get_single() {
+                if let Ok((_camera, camera_transform)) = camera_query.single() {
                     // Convert screen position to world position for 2D camera
                     let window_size = Vec2::new(window.width(), window.height());
                     
@@ -778,12 +703,12 @@ fn handle_node_clicks(
                         if distance < 30.0 {
                             // Check if this node is connected to current sector
                             if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
-                                if current_sector.connections.contains(&map_node.sector_id) {
+                                if current_sector.connections.contains(&map_node._sector_id) {
                                     // Travel to this sector
                                     try_travel_to_sector(
                                         &mut sector_map,
                                         &mut game_data,
-                                        map_node.sector_id,
+                                        map_node._sector_id,
                                         &mut event_writer,
                                         active_event,
                                     );

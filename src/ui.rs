@@ -29,87 +29,79 @@ fn setup_ui(mut commands: Commands) {
     // HUD Elements
     commands.spawn((
         HudText,
-        TextBundle::from_section(
-            "Fuel: 16 | Scrap: 15 | Sector: 1/30",
-            TextStyle {
-                font: default(),
-                font_size: 24.0,
-                color: Color::WHITE,
-            },
-        )
-        .with_style(Style {
-            position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            left: Val::Px(10.0),
+        Text::new("Fuel: 16 | Scrap: 15 | Sector: 1/30"),
+        TextFont {
+            font_size: 24.0,
             ..default()
-        }),
+        },
+        TextColor(Color::WHITE),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(10.0),
+            left: px(10.0),
+            ..default()
+        },
     ));
 
     // Sector Info
     commands.spawn((
         SectorText,
-        TextBundle::from_section(
-            "Current Sector: Loading...",
-            TextStyle {
-                font: default(),
-                font_size: 20.0,
-                color: Color::rgb(0.8, 0.8, 1.0),
-            },
-        )
-        .with_style(Style {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(80.0),
-            left: Val::Px(10.0),
+        Text::new("Current Sector: Loading..."),
+        TextFont {
+            font_size: 20.0,
             ..default()
-        }),
+        },
+        TextColor(Color::srgb(0.8, 0.8, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(80.0),
+            left: px(10.0),
+            ..default()
+        },
     ));
 
     // Controls
     commands.spawn((
-        TextBundle::from_section(
-            "Controls: 1-9 - Travel to Exit | Click Node - Travel | 1-3 - Event Choices | ESC - Pause",
-            TextStyle {
-                font: default(),
-                font_size: 16.0,
-                color: Color::rgb(0.7, 0.7, 0.7),
-            },
-        )
-        .with_style(Style {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(10.0),
-            left: Val::Px(10.0),
+        Text::new("Controls: 1-9 - Travel to Exit | Click Node - Travel | 1-3 - Event Choices | ESC - Pause"),
+        TextFont {
+            font_size: 16.0,
             ..default()
-        }),
+        },
+        TextColor(Color::srgb(0.7, 0.7, 0.7)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(10.0),
+            left: px(10.0),
+            ..default()
+        },
     ));
 
-    // Event UI
+    // Event UI - abajo a la derecha
     commands.spawn((
         EventText,
-        TextBundle::from_section(
-            "",
-            TextStyle {
-                font: default(),
-                font_size: 18.0,
-                color: Color::rgb(1.0, 1.0, 0.8),
-            },
-        )
-        .with_style(Style {
-            position_type: PositionType::Absolute,
-            top: Val::Percent(20.0),
-            right: Val::Px(10.0),
-            width: Val::Px(400.0),
+        Text::new(""),
+        TextFont {
+            font_size: 18.0,
             ..default()
-        }),
+        },
+        TextColor(Color::srgb(1.0, 1.0, 0.8)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(100.0),
+            right: px(10.0),
+            width: px(400.0),
+            ..default()
+        },
     ));
 }
 
 fn update_hud(
-    mut hud_query: Query<&mut Text, (With<HudText>, Without<SectorText>)>,
+    mut hud_query: Query<&mut TextSpan, With<HudText>>,
     game_data: Res<GameData>,
     sector_map: Res<crate::sector::SectorMap>,
 ) {
-    if let Ok(mut text) = hud_query.get_single_mut() {
-        text.sections[0].value = format!(
+    if let Ok(mut span) = hud_query.single_mut() {
+        **span = format!(
             "Fuel: {:.1} | Scrap: {} | Distance: {}",
             game_data.fuel,
             game_data.scrap,
@@ -122,7 +114,7 @@ fn update_event_ui(
     mut event_query: Query<&mut Text, With<EventText>>,
     active_event: Res<ActiveEvent>,
 ) {
-    if let Ok(mut text) = event_query.get_single_mut() {
+    if let Ok(mut text) = event_query.single_mut() {
         if let Some(event) = &active_event.event {
             let mut event_text = format!("{}\n{}\n\nChoices:\n", event.title, event.description);
             
@@ -130,18 +122,18 @@ fn update_event_ui(
                 event_text.push_str(&format!("{}. {}\n", i + 1, choice.text));
             }
             
-            text.sections[0].value = event_text;
+            *text = Text::new(event_text);
         } else {
-            text.sections[0].value = "".to_string();
+            *text = Text::new("");
         }
     }
 }
 
 fn update_sector_info(
-    mut sector_query: Query<&mut Text, (With<SectorText>, Without<HudText>)>,
+    mut sector_query: Query<&mut TextSpan, (With<SectorText>, Without<HudText>)>,
     sector_map: Res<crate::sector::SectorMap>,
 ) {
-    if let Ok(mut text) = sector_query.get_single_mut() {
+    if let Ok(mut span) = sector_query.single_mut() {
         if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
             let mut sector_text = format!(
                 "Current Sector: {}\nType: {:?}\n{}\n\nExits: ",
@@ -163,9 +155,9 @@ fn update_sector_info(
                 }
             }
             
-            text.sections[0].value = sector_text;
+            **span = sector_text;
         } else {
-            text.sections[0].value = "Loading sector...".to_string();
+            **span = "Loading sector...".to_string();
         }
     }
 }

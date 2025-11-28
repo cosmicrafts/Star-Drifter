@@ -6,7 +6,7 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app
-            .add_state::<GameState>()
+            .init_state::<GameState>()
             .add_plugins((
                 FactionsPlugin,
                 ShipPlugin,
@@ -24,11 +24,9 @@ impl Plugin for GamePlugin {
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum GameState {
-    MainMenu,
     #[default]
     Playing,
     Paused,
-    GameOver,
 }
 
 #[derive(Resource)]
@@ -36,25 +34,8 @@ pub struct GameData {
     pub current_sector: u32,
     pub fuel: f32,
     pub scrap: u32,
-    pub crew: Vec<CrewMember>,
-    pub difficulty: u32,
 }
 
-#[derive(Component, Clone)]
-pub struct CrewMember {
-    pub name: String,
-    pub faction: crate::factions::Faction,
-    pub skills: CrewSkills,
-    pub health: f32,
-}
-
-#[derive(Clone)]
-pub struct CrewSkills {
-    pub piloting: u32,
-    pub engines: u32,
-    pub weapons: u32,
-    pub shields: u32,
-}
 
 fn setup_game(mut commands: Commands) {
     // Initialize game data
@@ -62,37 +43,18 @@ fn setup_game(mut commands: Commands) {
         current_sector: 0,
         fuel: 50.0,
         scrap: 15,
-        crew: vec![
-            CrewMember {
-                name: "Captain Nova".to_string(),
-                faction: crate::factions::Faction::Cosmicons,
-                skills: CrewSkills {
-                    piloting: 2,
-                    engines: 1,
-                    weapons: 2,
-                    shields: 1,
-                },
-                health: 100.0,
-            }
-        ],
-        difficulty: 1,
     });
 
     // Spawn camera
-    commands.spawn(Camera2dBundle::default());
+    commands.spawn(Camera2d);
 }
 
 fn handle_input(
-    keyboard: Res<Input<KeyCode>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut next_state: ResMut<NextState<GameState>>,
     current_state: Res<State<GameState>>,
 ) {
     match current_state.get() {
-        GameState::MainMenu => {
-            if keyboard.just_pressed(KeyCode::Space) {
-                next_state.set(GameState::Playing);
-            }
-        }
         GameState::Playing => {
             if keyboard.just_pressed(KeyCode::Escape) {
                 next_state.set(GameState::Paused);
@@ -103,7 +65,6 @@ fn handle_input(
                 next_state.set(GameState::Playing);
             }
         }
-        _ => {}
     }
 }
 

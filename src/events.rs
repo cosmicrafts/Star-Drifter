@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use rand::Rng;
-use crate::factions::{Faction, RelationLevel};
+use crate::factions::Faction;
 use crate::game::GameData;
 
 pub struct EventsPlugin;
@@ -11,7 +11,7 @@ pub struct EventSystemSet;
 impl Plugin for EventsPlugin {
     fn build(&self, app: &mut App) {
         app
-            .add_event::<GameEvent>()
+            .add_message::<GameEvent>()
             .insert_resource(ActiveEvent::default())
             .insert_resource(InputConsumed::default())
             .configure_sets(Update, EventSystemSet.before(crate::sector::NavigationSystemSet))
@@ -23,13 +23,13 @@ impl Plugin for EventsPlugin {
     }
 }
 
-#[derive(Event, Clone)]
+#[derive(Message, Clone)]
 pub struct GameEvent {
-    pub event_type: GameEventType,
+    pub _event_type: GameEventType,
     pub title: String,
     pub description: String,
     pub choices: Vec<EventChoice>,
-    pub faction: Option<Faction>,
+    pub _faction: Option<Faction>,
 }
 
 #[derive(Clone)]
@@ -64,14 +64,12 @@ pub enum EventOutcome {
 pub enum EventRequirement {
     Fuel(f32),
     Scrap(u32),
-    CrewSkill { skill_type: String, level: u32 },
-    FactionRelation { faction: Faction, min_level: RelationLevel },
+    CrewSkill { _skill_type: String, _level: u32 },
 }
 
 #[derive(Resource, Default)]
 pub struct ActiveEvent {
     pub event: Option<GameEvent>,
-    pub choice_selected: Option<usize>,
 }
 
 #[derive(Resource, Default)]
@@ -83,7 +81,7 @@ pub struct InputConsumed {
 pub fn trigger_event_for_sector(
     sector_map: &crate::sector::SectorMap,
     sector_id: u32,
-    event_writer: &mut EventWriter<GameEvent>,
+    event_writer: &mut MessageWriter<GameEvent>,
     active_event: &mut ActiveEvent,
 ) {
     // Only trigger if no event is currently active
@@ -99,22 +97,22 @@ pub fn trigger_event_for_sector(
             
             let game_event = create_game_event_from_sector_event(sector_event, sector.danger_level);
             active_event.event = Some(game_event.clone());
-            event_writer.send(game_event);
+            event_writer.write(game_event);
         } else {
             // Generate random encounter if sector has no predefined events
             let random_event = generate_random_event(sector.danger_level);
             active_event.event = Some(random_event.clone());
-            event_writer.send(random_event);
+            event_writer.write(random_event);
         }
     }
 }
 
 // Old function - now disabled (events trigger automatically)
 fn _trigger_sector_events(
-    _event_writer: EventWriter<GameEvent>,
+    _event_writer: MessageWriter<GameEvent>,
     _sector_map: Res<crate::sector::SectorMap>,
     _active_event: ResMut<ActiveEvent>,
-    _keyboard: Res<Input<KeyCode>>,
+    _keyboard: Res<ButtonInput<KeyCode>>,
 ) {
     // Disabled - events now trigger automatically when arriving at sectors
 }
@@ -127,7 +125,7 @@ fn create_game_event_from_sector_event(
         crate::sector::EventType::Encounter => {
             let faction = sector_event.faction.clone().unwrap_or(Faction::Spirats);
             GameEvent {
-                event_type: GameEventType::Combat,
+                _event_type: GameEventType::Combat,
                 title: format!("{} Encounter", faction.name()),
                 description: sector_event.description.clone(),
                 choices: vec![
@@ -147,8 +145,8 @@ fn create_game_event_from_sector_event(
                         },
                         requirements: vec![
                             EventRequirement::CrewSkill { 
-                                skill_type: "diplomacy".to_string(), 
-                                level: 2 
+                                _skill_type: "diplomacy".to_string(), 
+                                _level: 2 
                             }
                         ],
                     },
@@ -169,12 +167,12 @@ fn create_game_event_from_sector_event(
                         requirements: vec![],
                     },
                 ],
-                faction: Some(faction),
+                _faction: Some(faction),
             }
         }
         crate::sector::EventType::Discovery => {
             GameEvent {
-                event_type: GameEventType::Discovery,
+                _event_type: GameEventType::Discovery,
                 title: "Discovery".to_string(),
                 description: sector_event.description.clone(),
                 choices: vec![
@@ -202,12 +200,12 @@ fn create_game_event_from_sector_event(
                         requirements: vec![],
                     },
                 ],
-                faction: sector_event.faction.clone(),
+                _faction: sector_event.faction.clone(),
             }
         }
         crate::sector::EventType::Opportunity => {
             GameEvent {
-                event_type: GameEventType::Diplomacy,
+                _event_type: GameEventType::Diplomacy,
                 title: "Distress Call".to_string(),
                 description: sector_event.description.clone(),
                 choices: vec![
@@ -237,12 +235,12 @@ fn create_game_event_from_sector_event(
                         requirements: vec![],
                     },
                 ],
-                faction: None,
+                _faction: None,
             }
         }
         crate::sector::EventType::Hazard => {
             GameEvent {
-                event_type: GameEventType::Hazard,
+                _event_type: GameEventType::Hazard,
                 title: "Space Hazard".to_string(),
                 description: sector_event.description.clone(),
                 choices: vec![
@@ -255,8 +253,8 @@ fn create_game_event_from_sector_event(
                         },
                         requirements: vec![
                             EventRequirement::CrewSkill { 
-                                skill_type: "piloting".to_string(), 
-                                level: 2 
+                                _skill_type: "piloting".to_string(), 
+                                _level: 2 
                             }
                         ],
                     },
@@ -286,13 +284,13 @@ fn create_game_event_from_sector_event(
                         requirements: vec![],
                     },
                 ],
-                faction: None,
+                _faction: None,
             }
         }
         crate::sector::EventType::Story => {
             let faction = sector_event.faction.clone().unwrap_or(Faction::Celestials);
             GameEvent {
-                event_type: GameEventType::Story,
+                _event_type: GameEventType::Story,
                 title: format!("{} Artifact", faction.name()),
                 description: sector_event.description.clone(),
                 choices: vec![
@@ -304,8 +302,8 @@ fn create_game_event_from_sector_event(
                         },
                         requirements: vec![
                             EventRequirement::CrewSkill { 
-                                skill_type: "science".to_string(), 
-                                level: 3 
+                                _skill_type: "science".to_string(), 
+                                _level: 3 
                             }
                         ],
                     },
@@ -327,7 +325,7 @@ fn create_game_event_from_sector_event(
                         requirements: vec![],
                     },
                 ],
-                faction: Some(faction),
+                _faction: Some(faction),
             }
         }
     }
@@ -347,7 +345,7 @@ fn generate_random_event(danger_level: u32) -> GameEvent {
 
 fn generate_merchant_event() -> GameEvent {
     GameEvent {
-        event_type: GameEventType::Trade,
+        _event_type: GameEventType::Trade,
         title: "Traveling Merchant".to_string(),
         description: "A merchant ship hails you, offering to trade supplies.".to_string(),
         choices: vec![
@@ -375,13 +373,13 @@ fn generate_merchant_event() -> GameEvent {
                 requirements: vec![],
             },
         ],
-        faction: Some(Faction::Neutral),
+        _faction: Some(Faction::Neutral),
     }
 }
 
 fn generate_anomaly_event(danger_level: u32) -> GameEvent {
     GameEvent {
-        event_type: GameEventType::Anomaly,
+        _event_type: GameEventType::Anomaly,
         title: "Cosmic Anomaly".to_string(),
         description: "Your sensors detect a strange energy signature ahead.".to_string(),
         choices: vec![
@@ -403,8 +401,8 @@ fn generate_anomaly_event(danger_level: u32) -> GameEvent {
                 },
                 requirements: vec![
                     EventRequirement::CrewSkill { 
-                        skill_type: "sensors".to_string(), 
-                        level: 2 
+                        _skill_type: "sensors".to_string(), 
+                        _level: 2 
                     }
                 ],
             },
@@ -414,13 +412,13 @@ fn generate_anomaly_event(danger_level: u32) -> GameEvent {
                 requirements: vec![],
             },
         ],
-        faction: None,
+        _faction: None,
     }
 }
 
 fn generate_derelict_event(danger_level: u32) -> GameEvent {
     GameEvent {
-        event_type: GameEventType::Discovery,
+        _event_type: GameEventType::Discovery,
         title: "Derelict Ship".to_string(),
         description: "You discover the wreckage of an ancient vessel drifting in space.".to_string(),
         choices: vec![
@@ -448,13 +446,13 @@ fn generate_derelict_event(danger_level: u32) -> GameEvent {
                 requirements: vec![],
             },
         ],
-        faction: None,
+        _faction: None,
     }
 }
 
 fn generate_pirate_event(danger_level: u32) -> GameEvent {
     GameEvent {
-        event_type: GameEventType::Combat,
+        _event_type: GameEventType::Combat,
         title: "Spirat Raiders".to_string(),
         description: "Spirat pirates emerge from an asteroid field, demanding tribute!".to_string(),
         choices: vec![
@@ -485,8 +483,8 @@ fn generate_pirate_event(danger_level: u32) -> GameEvent {
                 requirements: vec![
                     EventRequirement::Fuel(3.0),
                     EventRequirement::CrewSkill { 
-                        skill_type: "engines".to_string(), 
-                        level: 2 
+                        _skill_type: "engines".to_string(), 
+                        _level: 2 
                     }
                 ],
             },
@@ -496,7 +494,7 @@ fn generate_pirate_event(danger_level: u32) -> GameEvent {
                 requirements: vec![],
             },
         ],
-        faction: Some(Faction::Spirats),
+        _faction: Some(Faction::Spirats),
     }
 }
 
@@ -512,7 +510,7 @@ fn generate_faction_event(danger_level: u32) -> GameEvent {
     };
 
     GameEvent {
-        event_type: GameEventType::Diplomacy,
+        _event_type: GameEventType::Diplomacy,
         title: format!("{} Patrol", faction.name()),
         description: format!("A {} patrol ship approaches your vessel.", faction.name()),
         choices: vec![
@@ -547,12 +545,12 @@ fn generate_faction_event(danger_level: u32) -> GameEvent {
                 requirements: vec![],
             },
         ],
-        faction: Some(faction),
+        _faction: Some(faction),
     }
 }
 
 fn handle_game_events(
-    mut event_reader: EventReader<GameEvent>,
+    mut event_reader: MessageReader<GameEvent>,
     _active_event: ResMut<ActiveEvent>,
 ) {
     for event in event_reader.read() {
@@ -564,7 +562,7 @@ fn handle_game_events(
 }
 
 fn process_event_choices(
-    keyboard: Res<Input<KeyCode>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut active_event: ResMut<ActiveEvent>,
     mut game_data: ResMut<GameData>,
     mut input_consumed: ResMut<InputConsumed>,
@@ -573,15 +571,15 @@ fn process_event_choices(
         let mut choice_selected = None;
         let mut consumed_key = None;
         
-        if keyboard.just_pressed(KeyCode::Key1) {
+        if keyboard.just_pressed(KeyCode::Digit1) {
             choice_selected = Some(0);
-            consumed_key = Some(KeyCode::Key1);
-        } else if keyboard.just_pressed(KeyCode::Key2) {
+            consumed_key = Some(KeyCode::Digit1);
+        } else if keyboard.just_pressed(KeyCode::Digit2) {
             choice_selected = Some(1);
-            consumed_key = Some(KeyCode::Key2);
-        } else if keyboard.just_pressed(KeyCode::Key3) {
+            consumed_key = Some(KeyCode::Digit2);
+        } else if keyboard.just_pressed(KeyCode::Digit3) {
             choice_selected = Some(2);
-            consumed_key = Some(KeyCode::Key3);
+            consumed_key = Some(KeyCode::Digit3);
         }
         
         if let Some(choice_idx) = choice_selected {
@@ -623,13 +621,8 @@ fn check_requirements(requirements: &[EventRequirement], game_data: &GameData) -
                     return false;
                 }
             }
-            EventRequirement::CrewSkill { skill_type: _, level: _ } => {
+            EventRequirement::CrewSkill { _skill_type: _, _level: _ } => {
                 // TODO: Implement crew skill checking
-                // For now, assume requirements are met
-            }
-            EventRequirement::FactionRelation { faction: _, min_level: _ } => {
-                // TODO: Implement faction relation checking
-                // For now, assume requirements are met
             }
         }
     }

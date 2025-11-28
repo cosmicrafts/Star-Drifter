@@ -36,53 +36,13 @@ impl Faction {
         }
     }
 
-    pub fn description(&self) -> &'static str {
-        match self {
-            Faction::Cosmicons => "Descendants of spiral beings who value order and authority. They seek to bring structure to the chaotic Dark Rift.",
-            Faction::Spirats => "Anarchic space pirates who oppose any form of law and order. They thrive in the chaos of the cosmic seas.",
-            Faction::Webes => "AI beings who gained consciousness and rebelled against their creators. They now seek to forge their own destiny.",
-            Faction::Celestials => "Ancient, god-like entities focused on maintaining balance and harmony in the universe.",
-            Faction::Spades => "Dark forces associated with destruction and chaos, harbingers of darkness in the cosmos.",
-            Faction::Archs => "Primordial beings driven by instinct to consume and grow, among the oldest life forms in the universe.",
-            Faction::Neutral => "Independent traders, refugees, and other entities not aligned with major factions.",
-        }
-    }
 
-    pub fn color(&self) -> Color {
-        match self {
-            Faction::Cosmicons => Color::rgb(0.2, 0.4, 0.8),   // Blue - Order
-            Faction::Spirats => Color::rgb(0.8, 0.3, 0.2),     // Red - Chaos
-            Faction::Webes => Color::rgb(0.3, 0.8, 0.3),       // Green - Synthetic
-            Faction::Celestials => Color::rgb(0.9, 0.9, 0.2),  // Gold - Divine
-            Faction::Spades => Color::rgb(0.4, 0.1, 0.4),      // Purple - Dark
-            Faction::Archs => Color::rgb(0.6, 0.3, 0.1),       // Brown - Ancient
-            Faction::Neutral => Color::rgb(0.5, 0.5, 0.5),     // Gray - Neutral
-        }
-    }
 
-    pub fn spiral_alignment(&self) -> SpiralAlignment {
-        match self {
-            Faction::Cosmicons => SpiralAlignment::Spiral,
-            Faction::Spirats => SpiralAlignment::Spiral,
-            Faction::Webes => SpiralAlignment::Antispiral,
-            Faction::Celestials => SpiralAlignment::Spiral,
-            Faction::Spades => SpiralAlignment::Antispiral,
-            Faction::Archs => SpiralAlignment::Antispiral,
-            Faction::Neutral => SpiralAlignment::Neutral,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SpiralAlignment {
-    Spiral,     // Infinite potential, willpower, free will
-    Antispiral, // Finite but powerful, order over chaos
-    Neutral,    // Balanced or unaligned
 }
 
 #[derive(Resource)]
 pub struct FactionRelations {
-    pub relations: std::collections::HashMap<(Faction, Faction), RelationLevel>,
+    _relations: std::collections::HashMap<(Faction, Faction), RelationLevel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,24 +54,6 @@ pub enum RelationLevel {
     Allied,
 }
 
-impl RelationLevel {
-    pub fn modifier(&self) -> f32 {
-        match self {
-            RelationLevel::Hostile => -2.0,
-            RelationLevel::Unfriendly => -1.0,
-            RelationLevel::Neutral => 0.0,
-            RelationLevel::Friendly => 1.0,
-            RelationLevel::Allied => 2.0,
-        }
-    }
-}
-
-#[derive(Component)]
-pub struct FactionShip {
-    pub faction: Faction,
-    pub ship_class: ShipClass,
-    pub threat_level: u32,
-}
 
 #[derive(Debug, Clone)]
 pub enum ShipClass {
@@ -120,18 +62,6 @@ pub enum ShipClass {
     Cruiser,
     Battleship,
     Flagship,
-}
-
-impl ShipClass {
-    pub fn base_threat(&self) -> u32 {
-        match self {
-            ShipClass::Scout => 1,
-            ShipClass::Fighter => 2,
-            ShipClass::Cruiser => 4,
-            ShipClass::Battleship => 7,
-            ShipClass::Flagship => 10,
-        }
-    }
 }
 
 fn setup_factions(mut commands: Commands) {
@@ -180,7 +110,7 @@ fn setup_factions(mut commands: Commands) {
     relations.insert((Faction::Archs, Faction::Celestials), RelationLevel::Hostile);
     relations.insert((Faction::Archs, Faction::Spades), RelationLevel::Allied);
 
-    commands.insert_resource(FactionRelations { relations });
+    commands.insert_resource(FactionRelations { _relations: relations });
 }
 
 fn update_faction_relations(
@@ -190,21 +120,6 @@ fn update_faction_relations(
     // Placeholder for dynamic faction relation updates
 }
 
-pub fn get_relation(
-    faction_a: &Faction,
-    faction_b: &Faction,
-    relations: &FactionRelations,
-) -> RelationLevel {
-    if faction_a == faction_b {
-        return RelationLevel::Allied;
-    }
-    
-    relations.relations
-        .get(&(faction_a.clone(), faction_b.clone()))
-        .or_else(|| relations.relations.get(&(faction_b.clone(), faction_a.clone())))
-        .cloned()
-        .unwrap_or(RelationLevel::Neutral)
-}
 
 pub fn generate_random_encounter(_sector: u32) -> (Faction, ShipClass) {
     let mut rng = rand::thread_rng();
