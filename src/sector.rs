@@ -191,6 +191,16 @@ fn setup_sector_map(mut commands: Commands) {
         layer_nodes.push(current_layer);
     }
     
+    // Add exit node to the last layer - connects to next sector (auto-generated)
+    if let Some(last_layer) = layer_nodes.last() {
+        let next_sector_id = next_id;
+        for &sector_id in last_layer {
+            if let Some(sector) = sectors.get_mut(&sector_id) {
+                sector.connections.push(next_sector_id);
+            }
+        }
+    }
+    
     commands.insert_resource(SectorMap {
         current_sector_id: 0,
         sectors,
@@ -209,17 +219,8 @@ fn generate_sector(
     let events = generate_sector_events(&sector_type, rng);
     let danger_level = calculate_danger_level(distance, &sector_type);
     
-    // Generate 1-3 connections to other sectors (will be created when needed)
-    let num_connections = rng.gen_range(1..=3);
-    let connections = Vec::new();
-    
-    // For now, we'll generate connection IDs that will be created on-demand
-    // This creates a web-like structure
-    for _ in 0..num_connections {
-        // Generate a new sector ID that doesn't exist yet
-        // We'll use a simple approach: next available IDs
-        // In practice, these will be generated when player travels
-    }
+    // Each sector has only ONE connection: the next sector (id + 1)
+    let connections = vec![id + 1];
     
     Sector {
         _id: id,
@@ -393,8 +394,31 @@ fn handle_sector_navigation(
     if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
         let connections = current_sector.connections.clone();
         
-        // Handle navigation to connected sectors using number keys 1-9
+        // Check if we're at a node in the last layer (has exit node as last connection)
+        // If so, automatically advance to next sector when reaching exit node
+        if let Some(&exit_sector_id) = connections.last() {
+            // Check if this exit node leads to a sector that doesn't exist yet
+            // If it doesn't exist, we're at the exit and should auto-advance
+            if !sector_map.sectors.contains_key(&exit_sector_id) {
+                // Automatically travel to exit node (next sector)
+                try_travel_to_sector(
+                    &mut sector_map,
+                    &mut game_data,
+                    exit_sector_id,
+                    &mut event_writer,
+                    active_event,
+                );
+                return;
+            }
+        }
+        
+        // Handle navigation to other connected sectors using number keys 1-9
         for (i, &target_id) in connections.iter().enumerate() {
+            // Skip the exit node (last one) - it's automatic
+            if i == connections.len() - 1 && !sector_map.sectors.contains_key(&target_id) {
+                continue;
+            }
+            
             let key = match i {
                 0 => KeyCode::Digit1,
                 1 => KeyCode::Digit2,
@@ -446,8 +470,72 @@ fn try_travel_to_sector(
         }
     }
     
+    // Generate new sector map if it doesn't exist (this is the exit node to next sector)
     if !sector_map.sectors.contains_key(&target_sector_id) {
-        return; // Sector doesn't exist
+        let mut rng = rand::thread_rng();
+        let distance = sector_map.distance_traveled + 1;
+        let num_layers = rng.gen_range(5..=7);
+        let mut next_id = target_sector_id;
+        let mut layer_nodes: Vec<Vec<u32>> = Vec::new();
+        
+        // Generate first layer of new sector
+        let sector_type = generate_random_sector_type(&mut rng, distance);
+        let starting_sector = generate_sector(next_id, sector_type, &mut rng, distance);
+        sector_map.sectors.insert(next_id, starting_sector);
+        layer_nodes.push(vec![next_id]);
+        next_id += 1;
+        
+        // Generate remaining layers
+        for layer in 1..num_layers {
+            let nodes_in_layer = rng.gen_range(2..=4);
+            let mut current_layer = Vec::new();
+            
+            for _ in 0..nodes_in_layer {
+                let sector_type = generate_random_sector_type(&mut rng, distance + layer as u32);
+                let sector = generate_sector(next_id, sector_type, &mut rng, distance + layer as u32);
+                sector_map.sectors.insert(next_id, sector);
+                current_layer.push(next_id);
+                next_id += 1;
+            }
+            
+            // Connect to previous layer
+            let prev_layer = &layer_nodes[layer - 1];
+            for &current_id in &current_layer {
+                let num_connections = rng.gen_range(1..=2.min(prev_layer.len()));
+                let mut connected = std::collections::HashSet::new();
+                let mut connections_to_add = Vec::new();
+                
+                for _ in 0..num_connections {
+                    let target_id = prev_layer[rng.gen_range(0..prev_layer.len())];
+                    if !connected.contains(&target_id) {
+                        connected.insert(target_id);
+                        connections_to_add.push(target_id);
+                    }
+                }
+                
+                if let Some(sector) = sector_map.sectors.get_mut(&current_id) {
+                    sector.connections.extend(connections_to_add.iter().copied());
+                }
+                
+                for &target_id in &connections_to_add {
+                    if let Some(target_sector) = sector_map.sectors.get_mut(&target_id) {
+                        target_sector.connections.push(current_id);
+                    }
+                }
+            }
+            
+            layer_nodes.push(current_layer);
+        }
+        
+        // Add exit node to the last layer
+        if let Some(last_layer) = layer_nodes.last() {
+            let next_sector_id = next_id;
+            for &sector_id in last_layer {
+                if let Some(sector) = sector_map.sectors.get_mut(&sector_id) {
+                    sector.connections.push(next_sector_id);
+                }
+            }
+        }
     }
     
     // Travel to sector
@@ -478,15 +566,21 @@ fn setup_map_visual(mut commands: Commands) {
 
 fn update_map_visual(
     mut commands: Commands,
+    windows: Query<&Window>,
     sector_map: Res<SectorMap>,
     mut map_visual: ResMut<MapVisual>,
     node_query: Query<(Entity, &MapNode)>,
     connection_query: Query<Entity, (With<ConnectionLine>, Without<MapNode>)>,
     label_query: Query<Entity, With<NodeLabel>>,
 ) {
-    // Calculate positions for all sectors (procedural layout)
+    // Get window size to adapt the map
+    let Ok(window) = windows.single() else { return; };
+    let window_width = window.width();
+    let window_height = window.height();
+    
+    // Calculate positions for all sectors (procedural layout, adapted to window)
     let mut positions = HashMap::new();
-    calculate_sector_positions(&sector_map, &mut positions);
+    calculate_sector_positions(&sector_map, &mut positions, window_width, window_height);
     
     // Create/update nodes
     for (sector_id, sector) in sector_map.sectors.iter() {
@@ -620,6 +714,8 @@ fn update_map_visual(
 fn calculate_sector_positions(
     sector_map: &SectorMap,
     positions: &mut HashMap<u32, Vec2>,
+    window_width: f32,
+    window_height: f32,
 ) {
     // Simple layout: sectors arranged in layers based on distance
     // Each layer is a row, sectors spread horizontally
@@ -644,17 +740,37 @@ fn calculate_sector_positions(
         }
     }
     
-    // Position sectors in layers (horizontal layout like FTL)
-    let layer_spacing = 200.0; // Horizontal spacing between layers
-    let node_spacing = 100.0;  // Vertical spacing between nodes in same layer
-    let start_x = -500.0;      // Start from left
-    let start_y = 150.0;       // Center vertically
+    // Calculate spacing based on window size and number of layers
+    let num_layers = layer_map.len().max(1) as f32;
+    let max_nodes_per_layer = layer_map.values().map(|v| v.len()).max().unwrap_or(1) as f32;
+    
+    // Leave margins on all sides
+    let margin_x = 100.0;
+    let margin_y = 100.0;
+    let available_width = window_width - (2.0 * margin_x);
+    let available_height = window_height - (2.0 * margin_y);
+    
+    // Calculate spacing to fit everything within window
+    let layer_spacing = if num_layers > 1.0 {
+        available_width / (num_layers - 1.0)
+    } else {
+        0.0
+    };
+    let node_spacing = if max_nodes_per_layer > 1.0 {
+        available_height / (max_nodes_per_layer - 1.0)
+    } else {
+        0.0
+    };
+    
+    // Center the map
+    let start_x = -window_width / 2.0 + margin_x;
+    let center_y = 0.0; // Center vertically
     
     for (layer, sector_ids) in layer_map.iter() {
         let layer_x = start_x + (*layer as f32 * layer_spacing);
         let count = sector_ids.len() as f32;
-        let total_height = (count - 1.0) * node_spacing;
-        let start_y_offset = start_y - (total_height / 2.0);
+        let total_height = if count > 1.0 { (count - 1.0) * node_spacing } else { 0.0 };
+        let start_y_offset = center_y - (total_height / 2.0);
         
         for (i, &sector_id) in sector_ids.iter().enumerate() {
             let y = start_y_offset + (i as f32 * node_spacing);
