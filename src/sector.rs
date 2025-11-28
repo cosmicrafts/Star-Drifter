@@ -645,11 +645,21 @@ fn update_map_visual(
     
     // Recreate labels for nodes connected to current sector (show numbers)
     if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
-        for (index, &connected_id) in current_sector.connections.iter().enumerate() {
+        let mut seen = std::collections::HashSet::new();
+        let mut label_index = 0;
+        
+        for &connected_id in &current_sector.connections {
+            // Skip if already seen or doesn't exist
+            if seen.contains(&connected_id) || !sector_map.sectors.contains_key(&connected_id) {
+                continue;
+            }
+            seen.insert(connected_id);
+            
             if let Some(&pos) = positions.get(&connected_id) {
+                label_index += 1;
                 commands.spawn((
                     NodeLabel { _sector_id: connected_id },
-                    Text2d::new(format!("{}", index + 1)),
+                    Text2d::new(format!("{}", label_index)),
                     TextFont {
                         font_size: 20.0,
                         ..default()
