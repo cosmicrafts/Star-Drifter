@@ -4,6 +4,7 @@ mod game;
 mod factions;
 mod ship;
 mod sector;
+mod map;
 mod events;
 mod ui;
 

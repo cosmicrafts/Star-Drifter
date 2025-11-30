@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::{factions::FactionsPlugin, ship::ShipPlugin, sector::SectorPlugin, events::EventsPlugin, ui::UIPlugin};
+use crate::{factions::FactionsPlugin, ship::ShipPlugin, sector::SectorPlugin, map::MapPlugin, events::EventsPlugin, ui::UIPlugin};
 
 pub struct GamePlugin;
 
@@ -11,6 +11,7 @@ impl Plugin for GamePlugin {
                 FactionsPlugin,
                 ShipPlugin,
                 SectorPlugin,
+                MapPlugin,
                 EventsPlugin,
                 UIPlugin,
             ))
