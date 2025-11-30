@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::{factions::FactionsPlugin, ship::ShipPlugin, sector::SectorPlugin, map::MapPlugin, events::EventsPlugin, ui::UIPlugin};
+use crate::{factions::FactionsPlugin, ship::ShipPlugin, sector::SectorPlugin, map::MapPlugin, camera::CameraPlugin, events::EventsPlugin, ui::UIPlugin};
 
 pub struct GamePlugin;
 
@@ -12,6 +12,7 @@ impl Plugin for GamePlugin {
                 ShipPlugin,
                 SectorPlugin,
                 MapPlugin,
+                CameraPlugin,
                 EventsPlugin,
                 UIPlugin,
             ))
@@ -46,8 +47,7 @@ fn setup_game(mut commands: Commands) {
         scrap: 15,
     });
 
-    // Spawn camera
-    commands.spawn(Camera2d);
+    // Camera is now handled by CameraPlugin
 }
 
 fn handle_input(

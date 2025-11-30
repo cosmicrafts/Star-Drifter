@@ -202,8 +202,8 @@ fn update_map_visual(
 fn calculate_sector_positions(
     sector_map: &SectorMap,
     positions: &mut HashMap<u32, Vec2>,
-    window_width: f32,
-    window_height: f32,
+    _window_width: f32,  // No longer used, but kept for compatibility
+    _window_height: f32, // No longer used, but kept for compatibility
 ) {
     // Simple layout: sectors arranged in layers based on distance
     // Each layer is a row, sectors spread horizontally
@@ -228,40 +228,21 @@ fn calculate_sector_positions(
         }
     }
     
-    // Calculate spacing based on window size and number of layers
-    let num_layers = layer_map.len().max(1) as f32;
-    let max_nodes_per_layer = layer_map.values().map(|v| v.len()).max().unwrap_or(1) as f32;
-    
-    // Leave margins on all sides
-    let margin_x = 100.0;
-    let margin_y = 100.0;
-    let available_width = window_width - (2.0 * margin_x);
-    let available_height = window_height - (2.0 * margin_y);
-    
-    // Calculate spacing to fit everything within window
-    let layer_spacing = if num_layers > 1.0 {
-        available_width / (num_layers - 1.0)
-    } else {
-        0.0
-    };
-    let node_spacing = if max_nodes_per_layer > 1.0 {
-        available_height / (max_nodes_per_layer - 1.0)
-    } else {
-        0.0
-    };
-    
-    // Center the map
-    let start_x = -window_width / 2.0 + margin_x;
-    let center_y = 0.0; // Center vertically
+    // FIXED SPACING - no longer dependent on window size
+    // Map can be larger than window, PanCam allows navigation
+    const LAYER_SPACING: f32 = 300.0;  // Horizontal spacing between layers
+    const NODE_SPACING: f32 = 200.0;   // Vertical spacing between nodes in a layer
+    const START_X: f32 = 0.0;           // Starting X position (center of map)
+    const START_Y: f32 = 0.0;           // Starting Y position (center of map)
     
     for (layer, sector_ids) in layer_map.iter() {
-        let layer_x = start_x + (*layer as f32 * layer_spacing);
+        let layer_x = START_X + (*layer as f32 * LAYER_SPACING);
         let count = sector_ids.len() as f32;
-        let total_height = if count > 1.0 { (count - 1.0) * node_spacing } else { 0.0 };
-        let start_y_offset = center_y - (total_height / 2.0);
+        let total_height = if count > 1.0 { (count - 1.0) * NODE_SPACING } else { 0.0 };
+        let start_y_offset = START_Y - (total_height / 2.0);
         
         for (i, &sector_id) in sector_ids.iter().enumerate() {
-            let y = start_y_offset + (i as f32 * node_spacing);
+            let y = start_y_offset + (i as f32 * NODE_SPACING);
             positions.insert(sector_id, Vec2::new(layer_x, y));
         }
     }

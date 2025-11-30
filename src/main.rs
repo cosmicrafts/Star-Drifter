@@ -5,6 +5,7 @@ mod factions;
 mod ship;
 mod sector;
 mod map;
+mod camera;
 mod events;
 mod ui;
 
