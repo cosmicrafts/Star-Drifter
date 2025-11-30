@@ -561,13 +561,39 @@ fn handle_game_events(
     }
 }
 
+// Public function to process event choice by index (called from UI buttons or keyboard)
+pub fn process_event_choice(
+    choice_idx: usize,
+    active_event: &mut ResMut<ActiveEvent>,
+    game_data: &mut ResMut<GameData>,
+) -> bool {
+    if let Some(event) = &active_event.event {
+        if choice_idx < event.choices.len() {
+            let choice = &event.choices[choice_idx];
+            
+            // Check requirements
+            let can_choose = check_requirements(&choice.requirements, &game_data);
+            
+            if can_choose {
+                apply_outcome(&choice.outcome, game_data);
+                active_event.event = None;
+                return true;
+            } else {
+                println!("Cannot choose this option - requirements not met!");
+                return false;
+            }
+        }
+    }
+    false
+}
+
 fn process_event_choices(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut active_event: ResMut<ActiveEvent>,
     mut game_data: ResMut<GameData>,
     mut input_consumed: ResMut<InputConsumed>,
 ) {
-    if let Some(event) = &active_event.event {
+    if let Some(_event) = &active_event.event {
         let mut choice_selected = None;
         let mut consumed_key = None;
         
@@ -587,19 +613,7 @@ fn process_event_choices(
                 input_consumed.keys.push(key);
             }
             
-            if choice_idx < event.choices.len() {
-                let choice = &event.choices[choice_idx];
-                
-                // Check requirements
-                let can_choose = check_requirements(&choice.requirements, &game_data);
-                
-                if can_choose {
-                    apply_outcome(&choice.outcome, &mut game_data);
-                    active_event.event = None;
-                } else {
-                    println!("Cannot choose this option - requirements not met!");
-                }
-            }
+            process_event_choice(choice_idx, &mut active_event, &mut game_data);
         }
     }
 }
@@ -608,7 +622,7 @@ fn clear_consumed_input(mut input_consumed: ResMut<InputConsumed>) {
     input_consumed.keys.clear();
 }
 
-fn check_requirements(requirements: &[EventRequirement], game_data: &GameData) -> bool {
+pub fn check_requirements(requirements: &[EventRequirement], game_data: &GameData) -> bool {
     for requirement in requirements {
         match requirement {
             EventRequirement::Fuel(amount) => {

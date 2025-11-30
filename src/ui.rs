@@ -14,12 +14,12 @@ impl Plugin for UIPlugin {
         app
             .add_systems(Startup, setup_all_ui)
             .add_systems(Update, (
-                // Informative text elements
-                update_hud,
-                update_event_ui.run_if(in_state(GameState::Playing)),
-                update_sector_info.run_if(in_state(GameState::Playing)),
-                // Interactive buttons
+                // Interactive buttons (process first)
                 handle_all_buttons,
+                // Informative text elements (update after button processing)
+                update_hud,
+                update_event_ui.run_if(in_state(GameState::Playing)).after(handle_all_buttons),
+                update_sector_info.run_if(in_state(GameState::Playing)),
             ));
     }
 }
@@ -33,10 +33,22 @@ impl Plugin for UIPlugin {
 struct HudText;
 
 #[derive(Component)]
-struct EventText;
+struct SectorText;
+
+// Event panel components
+#[derive(Component)]
+struct EventPanel;
 
 #[derive(Component)]
-struct SectorText;
+struct EventTitle;
+
+#[derive(Component)]
+struct EventDescription;
+
+#[derive(Component)]
+pub struct EventChoiceButton {
+    pub choice_index: usize,
+}
 
 // Buttons - organized by category
 #[derive(Component)]
@@ -208,22 +220,105 @@ fn setup_sector_info(commands: &mut Commands) {
 }
 
 fn setup_event_ui(commands: &mut Commands) {
+    // Main event panel (FTL style - centered at bottom)
     commands.spawn((
-        EventText,
-        Text::new(""),
-        TextFont {
-            font_size: 18.0,
-            ..default()
-        },
-        TextColor(Color::srgb(1.0, 1.0, 0.8)),
+        EventPanel,
         Node {
             position_type: PositionType::Absolute,
-            bottom: px(100.0),
-            right: px(10.0),
-            width: px(400.0),
+            bottom: px(50.0),
+            left: px(50.0),
+            right: px(50.0),
+            height: px(400.0),
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(20.0)),
+            row_gap: px(15.0),
             ..default()
         },
-    ));
+        BackgroundColor(Color::srgb(0.1, 0.1, 0.15)),
+        Visibility::Hidden, // Hidden by default, shown when event is active
+    )).with_children(|parent| {
+        // Event title
+        parent.spawn((
+            EventTitle,
+            Text::new(""),
+            TextFont {
+                font_size: 28.0,
+                ..default()
+            },
+            TextColor(Color::srgb(1.0, 0.9, 0.7)),
+            Node {
+                margin: UiRect::bottom(px(10.0)),
+                ..default()
+            },
+        ));
+
+        // Event description
+        parent.spawn((
+            EventDescription,
+            Text::new(""),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.9, 0.9)),
+            Node {
+                margin: UiRect::bottom(px(20.0)),
+                ..default()
+            },
+        ));
+
+        // Container for choice buttons
+        parent.spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(10.0),
+                ..default()
+            },
+        )).with_children(|parent| {
+            // Create buttons for choices (max 4 choices)
+            for i in 0..4 {
+                parent.spawn((
+                    EventChoiceButton { choice_index: i },
+                    Button,
+                    Node {
+                        width: percent(100.0),
+                        height: px(50.0),
+                        padding: UiRect::all(px(10.0)),
+                        justify_content: JustifyContent::FlexStart,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(2.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.2, 0.2, 0.3)),
+                    Visibility::Hidden, // Hidden by default
+                )).with_children(|parent| {
+                    // Button number label
+                    parent.spawn((
+                        Text::new(format!("{}", i + 1)),
+                        TextFont {
+                            font_size: 20.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(1.0, 0.8, 0.0)),
+                        Node {
+                            width: px(30.0),
+                            margin: UiRect::right(px(15.0)),
+                            ..default()
+                        },
+                    ));
+                    // Button text
+                    parent.spawn((
+                        Text::new(""),
+                        TextFont {
+                            font_size: 18.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+            }
+        });
+    });
 }
 
 fn setup_controls_text(commands: &mut Commands) {
@@ -246,12 +341,17 @@ fn handle_all_buttons(
     mut center_btn: Query<&Interaction, (Changed<Interaction>, With<CameraCenterButton>)>,
     mut zoom_in_btn: Query<&Interaction, (Changed<Interaction>, With<CameraZoomInButton>)>,
     mut zoom_out_btn: Query<&Interaction, (Changed<Interaction>, With<CameraZoomOutButton>)>,
+    // Event choice buttons
+    mut event_choice_buttons: Query<(&Interaction, &EventChoiceButton), (Changed<Interaction>, With<EventChoiceButton>)>,
     // Camera resources and queries
     mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<Button>)>,
     pan_cam_query: Query<&bevy_pancam::PanCam>,
     sector_map: Res<crate::sector::SectorMap>,
     mut camera_animation: ResMut<crate::camera::CameraAnimation>,
     windows: Query<&Window>,
+    // Event resources
+    mut active_event: ResMut<crate::events::ActiveEvent>,
+    mut game_data: ResMut<GameData>,
 ) {
     // Handle center button (GPS)
     for interaction in center_btn.iter_mut() {
@@ -308,6 +408,17 @@ fn handle_all_buttons(
             }
         }
     }
+
+    // Handle event choice buttons
+    for (interaction, choice_button) in event_choice_buttons.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            crate::events::process_event_choice(
+                choice_button.choice_index,
+                &mut active_event,
+                &mut game_data,
+            );
+        }
+    }
 }
 
 // ============================================
@@ -330,20 +441,84 @@ fn update_hud(
 }
 
 fn update_event_ui(
-    mut event_query: Query<&mut Text, With<EventText>>,
     active_event: Res<ActiveEvent>,
+    game_data: Res<GameData>,
+    mut visibility_params: ParamSet<(
+        Query<&mut Visibility, With<EventPanel>>,
+        Query<&mut Visibility, With<EventChoiceButton>>,
+    )>,
+    mut choice_button_query: Query<(Entity, &EventChoiceButton, &Children), Without<EventPanel>>,
+    mut text_params: ParamSet<(
+        Query<&mut Text, With<EventTitle>>,
+        Query<&mut Text, With<EventDescription>>,
+        Query<&mut Text>,
+    )>,
 ) {
-    if let Ok(mut text) = event_query.single_mut() {
-        if let Some(event) = &active_event.event {
-            let mut event_text = format!("{}\n{}\n\nChoices:\n", event.title, event.description);
-            
-            for (i, choice) in event.choices.iter().enumerate() {
-                event_text.push_str(&format!("{}. {}\n", i + 1, choice.text));
-            }
-            
-            *text = Text::new(event_text);
+    // Show/hide panel based on active event
+    if let Ok(mut panel_visibility) = visibility_params.p0().single_mut() {
+        if active_event.event.is_some() {
+            *panel_visibility = Visibility::Visible;
         } else {
-            *text = Text::new("");
+            // Hide panel and all buttons when no event is active
+            *panel_visibility = Visibility::Hidden;
+            for (button_entity, _, _) in choice_button_query.iter() {
+                if let Ok(mut button_visibility) = visibility_params.p1().get_mut(button_entity) {
+                    *button_visibility = Visibility::Hidden;
+                }
+            }
+            return;
+        }
+    }
+
+    if let Some(event) = &active_event.event {
+        // Update title (using ParamSet to avoid query conflicts)
+        if let Ok(mut title) = text_params.p0().single_mut() {
+            *title = Text::new(event.title.clone());
+        }
+
+        // Update description
+        if let Ok(mut description) = text_params.p1().single_mut() {
+            *description = Text::new(event.description.clone());
+        }
+
+        // Update choice buttons
+        for (button_entity, choice_button, children) in choice_button_query.iter_mut() {
+            if choice_button.choice_index < event.choices.len() {
+                let choice = &event.choices[choice_button.choice_index];
+                
+                // Show button (using ParamSet to avoid query conflicts)
+                if let Ok(mut button_visibility) = visibility_params.p1().get_mut(button_entity) {
+                    *button_visibility = Visibility::Visible;
+                }
+
+                // Check if choice is available (requirements met)
+                let can_choose = crate::events::check_requirements(&choice.requirements, &game_data);
+
+                // Update button text (second child is the text)
+                for (i, child) in children.iter().enumerate() {
+                    if i == 1 {
+                        if let Ok(mut text) = text_params.p2().get_mut(child) {
+                            let mut choice_text = choice.text.clone();
+                            if !can_choose {
+                                choice_text.push_str(" (Requirements not met)");
+                            }
+                            *text = Text::new(choice_text);
+                        }
+                    }
+                }
+            } else {
+                // Hide button if no choice at this index
+                if let Ok(mut button_visibility) = visibility_params.p1().get_mut(button_entity) {
+                    *button_visibility = Visibility::Hidden;
+                }
+            }
+        }
+    } else {
+        // Hide all buttons when no event is active
+        for (button_entity, _, _) in choice_button_query.iter() {
+            if let Ok(mut button_visibility) = visibility_params.p1().get_mut(button_entity) {
+                *button_visibility = Visibility::Hidden;
+            }
         }
     }
 }
