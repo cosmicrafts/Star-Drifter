@@ -53,10 +53,8 @@ fn update_map_visual(
     connection_query: Query<Entity, (With<ConnectionLine>, Without<MapNode>)>,
     label_query: Query<Entity, With<NodeLabel>>,
 ) {
-    // Get window size to adapt the map
-    let Ok(window) = windows.single() else { return; };
-    let window_width = window.width();
-    let window_height = window.height();
+    // Get window size to adapt the map (currently unused but kept for future use)
+    let Ok(_window) = windows.single() else { return; };
     
     // Use positions directly from sectors (they're stored in Sector.position)
     // Update cache for compatibility with existing code
@@ -72,9 +70,9 @@ fn update_map_visual(
             let color = if is_current {
                 Color::srgb(0.0, 1.0, 0.0) // Green for current
             } else if sector.visited {
-                Color::srgb(0.5, 0.5, 0.5) // Gray for visited
+                Color::srgb(0.3, 0.5, 0.8) // Blue for visited
             } else {
-                Color::srgb(0.8, 0.8, 0.8) // White for unvisited
+                Color::srgb(0.9, 0.9, 1.0) // Light blue/white for unvisited
             };
             
             let size = if is_current { 15.0 } else { 10.0 };
@@ -96,11 +94,11 @@ fn update_map_visual(
             // Update existing node position and color
             let is_current = *sector_id == sector_map.current_sector_id;
             let color = if is_current {
-                Color::srgb(0.0, 1.0, 0.0)
+                Color::srgb(0.0, 1.0, 0.0) // Green for current
             } else if sector.visited {
-                Color::srgb(0.5, 0.5, 0.5)
+                Color::srgb(0.3, 0.5, 0.8) // Blue for visited
             } else {
-                Color::srgb(0.8, 0.8, 0.8)
+                Color::srgb(0.9, 0.9, 1.0) // Light blue/white for unvisited
             };
             
             if let Ok((entity, _)) = node_query.get(*map_visual.node_entities.get(sector_id).unwrap()) {
@@ -190,18 +188,29 @@ fn update_map_visual(
             if !existing_connections.contains(&connection_key) {
                 existing_connections.insert(connection_key);
                 
+                // Determine if this line connects to the current node (highlight it)
+                let is_current_connection = *sector_id == sector_map.current_sector_id 
+                    || connected_id == sector_map.current_sector_id;
+                
                 // Create line between nodes
                 let mid_point = (from_pos + to_pos) / 2.0;
                 let direction = to_pos - from_pos;
                 let length = direction.length();
                 let angle = direction.y.atan2(direction.x);
                 
+                // Use brighter color and thicker line for connections from current node
+                let (line_color, line_thickness) = if is_current_connection {
+                    (Color::srgb(1.0, 0.8, 0.0), 3.0) // Bright orange/yellow for current connections
+                } else {
+                    (Color::srgb(0.3, 0.3, 0.3), 2.0) // Dark gray for other connections
+                };
+                
                 let line_entity = commands.spawn((
                     ConnectionLine {
                     },
                     Sprite {
-                        color: Color::srgb(0.3, 0.3, 0.3),
-                        custom_size: Some(Vec2::new(length, 2.0)),
+                        color: line_color,
+                        custom_size: Some(Vec2::new(length, line_thickness)),
                         ..default()
                     },
                     Transform {
