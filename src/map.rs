@@ -199,7 +199,7 @@ fn update_map_visual(
     }
 }
 
-fn calculate_sector_positions(
+pub fn calculate_sector_positions(
     sector_map: &SectorMap,
     positions: &mut HashMap<u32, Vec2>,
     _window_width: f32,  // No longer used, but kept for compatibility
