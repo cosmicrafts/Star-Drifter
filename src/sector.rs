@@ -393,6 +393,7 @@ fn generate_nodes_around(
 ) {
     const BASE_DISTANCE: f32 = 300.0;
     const MIN_SEPARATION: f32 = 120.0; // Minimum distance between nodes
+    const CONNECTION_RANGE: f32 = BASE_DISTANCE * 1.8; // Range to search for existing nodes to connect
     
     // Check if node exists
     let current_pos = if let Some(node) = sector_map.sectors.get(&node_id) {
@@ -400,6 +401,12 @@ fn generate_nodes_around(
     } else {
         return;
     };
+    
+    // Get current node's existing connections to avoid reconnecting
+    let existing_connections: std::collections::HashSet<u32> = sector_map.sectors
+        .get(&node_id)
+        .map(|s| s.connections.iter().copied().collect())
+        .unwrap_or_default();
     
     // Calculate "forward" direction (away from source)
     let base_angle = if let Some(source_id) = source_node_id {
@@ -422,63 +429,126 @@ fn generate_nodes_around(
         hash_to_float(h) * 2.0 * std::f32::consts::PI
     };
     
-    // Generate 2-4 new nodes in a forward cone (120 degrees)
-    let new_nodes_count = rng.gen_range(2..=4);
+    // Generate 2-4 connection slots in a forward cone (120 degrees)
+    let connection_slots = rng.gen_range(2..=4);
     let arc_span = std::f32::consts::PI * 2.0 / 3.0; // 120 degrees
-    let angle_step = if new_nodes_count > 1 {
-        arc_span / (new_nodes_count as f32 - 1.0)
+    let angle_step = if connection_slots > 1 {
+        arc_span / (connection_slots as f32 - 1.0)
     } else {
         0.0
     };
     
-    for i in 0..new_nodes_count {
-        let new_node_id = sector_map.next_node_id;
-        sector_map.next_node_id += 1;
-        
+    // Track which existing nodes we've already considered for connection
+    let mut used_existing_nodes = std::collections::HashSet::new();
+    
+    for i in 0..connection_slots {
         // Calculate angle within the forward cone
         let offset_from_center = -arc_span / 2.0 + angle_step * (i as f32);
         let jitter = (rng.gen::<f32>() - 0.5) * 0.3; // Small random variation
         let angle = base_angle + offset_from_center + jitter;
         
-        // Try to find a position that doesn't collide with existing nodes
+        // Calculate ideal position for this connection
         let dir_vec = Vec2::new(angle.cos(), angle.sin());
-        let mut radius = BASE_DISTANCE;
-        let mut candidate_pos = current_pos + dir_vec * radius;
+        let ideal_pos = current_pos + dir_vec * BASE_DISTANCE;
         
-        // Check for collisions and adjust radius if needed
-        loop {
-            let mut too_close = false;
-            for (_, sector) in sector_map.sectors.iter() {
-                if sector.position.distance(candidate_pos) < MIN_SEPARATION {
-                    too_close = true;
-                    break;
+        // First, try to find an existing node nearby to connect to
+        let mut found_existing = false;
+        let mut best_existing_id = None;
+        let mut best_distance = CONNECTION_RANGE;
+        
+        for (other_id, other_sector) in sector_map.sectors.iter() {
+            // Skip self, source, and already connected nodes
+            if *other_id == node_id 
+                || source_node_id == Some(*other_id)
+                || existing_connections.contains(other_id)
+                || used_existing_nodes.contains(other_id) {
+                continue;
+            }
+            
+            let other_pos = other_sector.position;
+            let distance_to_ideal = other_pos.distance(ideal_pos);
+            let distance_to_current = other_pos.distance(current_pos);
+            
+            // Check if this node is in a reasonable range and direction
+            if distance_to_current <= CONNECTION_RANGE 
+                && distance_to_current >= MIN_SEPARATION
+                && distance_to_ideal < best_distance {
+                // Verify it's in roughly the right direction (within 60 degrees of ideal)
+                let to_other = (other_pos - current_pos).normalize();
+                let ideal_dir = dir_vec;
+                let dot_product = to_other.dot(ideal_dir);
+                if dot_product > 0.5 { // ~60 degrees
+                    best_existing_id = Some(*other_id);
+                    best_distance = distance_to_ideal;
+                    found_existing = true;
                 }
             }
-            
-            if !too_close {
-                break;
-            }
-            
-            radius += 50.0;
-            if radius > BASE_DISTANCE * 3.0 {
-                // Give up, use this position even if close
-                break;
-            }
-            candidate_pos = current_pos + dir_vec * radius;
         }
         
-        // Create new node with calculated position
-        let sector_type = generate_random_sector_type(rng, distance);
-        let mut new_node = generate_sector(new_node_id, sector_type, rng, distance, candidate_pos);
-        
-        // Connect bidirectionally to the current node
-        new_node.connections.push(node_id);
-        sector_map.sectors.insert(new_node_id, new_node);
-        
-        // Add reverse connection
-        if let Some(current) = sector_map.sectors.get_mut(&node_id) {
-            if !current.connections.contains(&new_node_id) {
-                current.connections.push(new_node_id);
+        if found_existing {
+            // Connect to existing node
+            if let Some(existing_id) = best_existing_id {
+                used_existing_nodes.insert(existing_id);
+                
+                // Add bidirectional connection
+                if let Some(current) = sector_map.sectors.get_mut(&node_id) {
+                    if !current.connections.contains(&existing_id) {
+                        current.connections.push(existing_id);
+                    }
+                }
+                if let Some(existing) = sector_map.sectors.get_mut(&existing_id) {
+                    if !existing.connections.contains(&node_id) {
+                        existing.connections.push(node_id);
+                    }
+                }
+            }
+        } else {
+            // No existing node found, create a new one
+            let new_node_id = sector_map.next_node_id;
+            sector_map.next_node_id += 1;
+            
+            // Try to find a position that doesn't collide with existing nodes
+            let mut radius = BASE_DISTANCE;
+            let mut candidate_pos = current_pos + dir_vec * radius;
+            
+            // Check for collisions and adjust radius if needed
+            loop {
+                let mut too_close = false;
+                for (other_id, other_sector) in sector_map.sectors.iter() {
+                    if *other_id == node_id {
+                        continue;
+                    }
+                    if other_sector.position.distance(candidate_pos) < MIN_SEPARATION {
+                        too_close = true;
+                        break;
+                    }
+                }
+                
+                if !too_close {
+                    break;
+                }
+                
+                radius += 50.0;
+                if radius > BASE_DISTANCE * 3.0 {
+                    // Give up, use this position even if close
+                    break;
+                }
+                candidate_pos = current_pos + dir_vec * radius;
+            }
+            
+            // Create new node with calculated position
+            let sector_type = generate_random_sector_type(rng, distance);
+            let mut new_node = generate_sector(new_node_id, sector_type, rng, distance, candidate_pos);
+            
+            // Connect bidirectionally to the current node
+            new_node.connections.push(node_id);
+            sector_map.sectors.insert(new_node_id, new_node);
+            
+            // Add reverse connection
+            if let Some(current) = sector_map.sectors.get_mut(&node_id) {
+                if !current.connections.contains(&new_node_id) {
+                    current.connections.push(new_node_id);
+                }
             }
         }
     }
