@@ -25,6 +25,7 @@ pub struct SectorMap {
     pub current_sector_id: u32,
     pub sectors: HashMap<u32, Sector>,
     pub distance_traveled: u32, // For scaling difficulty
+    pub next_node_id: u32, // Track next available node ID
 }
 
 #[derive(Clone)]
@@ -37,6 +38,7 @@ pub struct Sector {
     pub visited: bool,
     pub events: Vec<SectorEvent>,
     pub danger_level: u32,
+    pub position: Vec2, // Position in world space (stored in sector for consistency)
 }
 
 #[derive(Clone, Debug)]
@@ -103,103 +105,74 @@ pub enum EventType {
 }
 
 
+// Determine sector number procedurally based on node ID
+// Each sector contains approximately 10 nodes
+fn get_sector_number(node_id: u32) -> u32 {
+    node_id / 10
+}
+
 fn setup_sector_map(mut commands: Commands) {
     let mut sectors = HashMap::new();
     let mut rng = rand::thread_rng();
     
-    // Generate a complete procedural map (like FTL)
-    // Create 5-7 layers with 2-4 nodes per layer
-    let num_layers = rng.gen_range(5..=7);
-    let mut next_id = 0u32;
-    let mut layer_nodes: Vec<Vec<u32>> = Vec::new();
-    
-    // Generate first layer (starting sector)
+    // Start with a single starting node at origin
+    let starting_node_id = 0u32;
     let starting_sector = generate_sector(
-        next_id,
+        starting_node_id,
         SectorType::Station,
         &mut rng,
         0,
+        Vec2::ZERO, // Start at origin
     );
-    sectors.insert(next_id, starting_sector);
-    layer_nodes.push(vec![next_id]);
-    next_id += 1;
+    sectors.insert(starting_node_id, starting_sector);
     
-    // Generate remaining layers
-    for layer in 1..num_layers {
-        let nodes_in_layer = rng.gen_range(2..=4);
-        let mut current_layer = Vec::new();
-        
-        for _ in 0..nodes_in_layer {
-            let distance = layer as u32;
-            let sector_type = generate_random_sector_type(&mut rng, distance);
-            let sector = generate_sector(next_id, sector_type, &mut rng, distance);
-            sectors.insert(next_id, sector);
-            current_layer.push(next_id);
-            next_id += 1;
-        }
-        
-        // Connect to previous layer
-        let prev_layer = &layer_nodes[layer - 1];
-        for &current_id in &current_layer {
-            // Each node connects to 1-2 nodes from previous layer
-            let num_connections = rng.gen_range(1..=2.min(prev_layer.len()));
-            let mut connected = std::collections::HashSet::new();
-            let mut connections_to_add = Vec::new();
-            
-            for _ in 0..num_connections {
-                let target_id = prev_layer[rng.gen_range(0..prev_layer.len())];
-                if !connected.contains(&target_id) {
-                    connected.insert(target_id);
-                    connections_to_add.push(target_id);
-                }
-            }
-            
-            // Add forward connections
-            if let Some(sector) = sectors.get_mut(&current_id) {
-                sector.connections.extend(connections_to_add.iter().copied());
-            }
-            
-            // Add reverse connections
-            for &target_id in &connections_to_add {
-                if let Some(target_sector) = sectors.get_mut(&target_id) {
-                    target_sector.connections.push(current_id);
-                }
-            }
-        }
-        
-        layer_nodes.push(current_layer);
-    }
+    // Generate 3-5 initial nodes around the starting node (radial distribution for initial setup)
+    let initial_nodes = rng.gen_range(3..=5);
+    let mut next_id = 1u32;
+    const INITIAL_DISTANCE: f32 = 150.0;
+    let angle_step = (std::f32::consts::PI * 2.0) / initial_nodes as f32;
     
-    // Add exit node to the last layer - connects to next sector (auto-generated)
-    if let Some(last_layer) = layer_nodes.last() {
-        let next_sector_id = next_id;
-        for &sector_id in last_layer {
-            if let Some(sector) = sectors.get_mut(&sector_id) {
-                sector.connections.push(next_sector_id);
-            }
+    for i in 0..initial_nodes {
+        let angle = i as f32 * angle_step;
+        let pos = Vec2::new(angle.cos() * INITIAL_DISTANCE, angle.sin() * INITIAL_DISTANCE);
+        
+        let distance = 1;
+        let sector_type = generate_random_sector_type(&mut rng, distance);
+        let mut new_node = generate_sector(next_id, sector_type, &mut rng, distance, pos);
+        
+        // Connect bidirectionally to starting node
+        if let Some(starting) = sectors.get_mut(&starting_node_id) {
+            starting.connections.push(next_id);
         }
+        new_node.connections.push(starting_node_id);
+        
+        sectors.insert(next_id, new_node);
+        next_id += 1;
     }
     
     commands.insert_resource(SectorMap {
-        current_sector_id: 0,
+        current_sector_id: starting_node_id,
         sectors,
         distance_traveled: 0,
+        next_node_id: next_id,
     });
 }
+
 
 fn generate_sector(
     id: u32,
     sector_type: SectorType,
     rng: &mut rand::rngs::ThreadRng,
     distance: u32,
+    position: Vec2,
 ) -> Sector {
     let name = generate_sector_name(&sector_type, id);
     let description = sector_type.description().to_string();
     let events = generate_sector_events(&sector_type, rng);
     let danger_level = calculate_danger_level(distance, &sector_type);
     
-    // Each sector has only ONE connection: the next sector (id + 1)
-    let connections = vec![id + 1];
+    // Connections will be added during map generation, not here
+    let connections = Vec::new();
     
     Sector {
         _id: id,
@@ -210,6 +183,7 @@ fn generate_sector(
         visited: false,
         events,
         danger_level,
+        position,
     }
 }
 
@@ -361,7 +335,7 @@ fn handle_sector_navigation(
     mut sector_map: ResMut<SectorMap>,
     mut game_data: ResMut<crate::game::GameData>,
     mut event_writer: MessageWriter<crate::events::GameEvent>,
-    active_event: ResMut<crate::events::ActiveEvent>,
+    mut active_event: ResMut<crate::events::ActiveEvent>,
     input_consumed: Res<crate::events::InputConsumed>,
 ) {
     // Don't allow navigation if an event is currently active
@@ -373,31 +347,9 @@ fn handle_sector_navigation(
     if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
         let connections = current_sector.connections.clone();
         
-        // Check if we're at a node in the last layer (has exit node as last connection)
-        // If so, automatically advance to next sector when reaching exit node
-        if let Some(&exit_sector_id) = connections.last() {
-            // Check if this exit node leads to a sector that doesn't exist yet
-            // If it doesn't exist, we're at the exit and should auto-advance
-            if !sector_map.sectors.contains_key(&exit_sector_id) {
-                // Automatically travel to exit node (next sector)
-                try_travel_to_sector(
-                    &mut sector_map,
-                    &mut game_data,
-                    exit_sector_id,
-                    &mut event_writer,
-                    active_event,
-                );
-                return;
-            }
-        }
-        
-        // Handle navigation to other connected sectors using number keys 1-9
+        // Handle navigation to all connected nodes using number keys 1-9
+        // All connections are valid - non-existent nodes will be generated on-demand
         for (i, &target_id) in connections.iter().enumerate() {
-            // Skip the exit node (last one) - it's automatic
-            if i == connections.len() - 1 && !sector_map.sectors.contains_key(&target_id) {
-                continue;
-            }
-            
             let key = match i {
                 0 => KeyCode::Digit1,
                 1 => KeyCode::Digit2,
@@ -422,7 +374,7 @@ fn handle_sector_navigation(
                     &mut game_data,
                     target_id,
                     &mut event_writer,
-                    active_event,
+                    &mut active_event,
                 );
                 break;
             }
@@ -430,104 +382,199 @@ fn handle_sector_navigation(
     }
 }
 
+// Generate new nodes around a node when traveling to it
+// New nodes are generated in directions AWAY from the source node (outward expansion like neural connections)
+fn generate_nodes_around(
+    sector_map: &mut SectorMap,
+    node_id: u32,
+    source_node_id: Option<u32>,
+    rng: &mut rand::rngs::ThreadRng,
+    distance: u32,
+) {
+    const BASE_DISTANCE: f32 = 300.0;
+    const MIN_SEPARATION: f32 = 120.0; // Minimum distance between nodes
+    
+    // Check if node exists
+    let current_pos = if let Some(node) = sector_map.sectors.get(&node_id) {
+        node.position
+    } else {
+        return;
+    };
+    
+    // Calculate "forward" direction (away from source)
+    let base_angle = if let Some(source_id) = source_node_id {
+        if let Some(source_node) = sector_map.sectors.get(&source_id) {
+            let direction = current_pos - source_node.position;
+            if direction.length_squared() > 0.0001 {
+                direction.y.atan2(direction.x) // Direction from source to current
+            } else {
+                // Too close, use deterministic hash
+                let h = hash_sector_id(node_id);
+                hash_to_float(h) * 2.0 * std::f32::consts::PI
+            }
+        } else {
+            let h = hash_sector_id(node_id);
+            hash_to_float(h) * 2.0 * std::f32::consts::PI
+        }
+    } else {
+        // No source (starting node) - use deterministic hash
+        let h = hash_sector_id(node_id);
+        hash_to_float(h) * 2.0 * std::f32::consts::PI
+    };
+    
+    // Generate 2-4 new nodes in a forward cone (120 degrees)
+    let new_nodes_count = rng.gen_range(2..=4);
+    let arc_span = std::f32::consts::PI * 2.0 / 3.0; // 120 degrees
+    let angle_step = if new_nodes_count > 1 {
+        arc_span / (new_nodes_count as f32 - 1.0)
+    } else {
+        0.0
+    };
+    
+    for i in 0..new_nodes_count {
+        let new_node_id = sector_map.next_node_id;
+        sector_map.next_node_id += 1;
+        
+        // Calculate angle within the forward cone
+        let offset_from_center = -arc_span / 2.0 + angle_step * (i as f32);
+        let jitter = (rng.gen::<f32>() - 0.5) * 0.3; // Small random variation
+        let angle = base_angle + offset_from_center + jitter;
+        
+        // Try to find a position that doesn't collide with existing nodes
+        let dir_vec = Vec2::new(angle.cos(), angle.sin());
+        let mut radius = BASE_DISTANCE;
+        let mut candidate_pos = current_pos + dir_vec * radius;
+        
+        // Check for collisions and adjust radius if needed
+        loop {
+            let mut too_close = false;
+            for (_, sector) in sector_map.sectors.iter() {
+                if sector.position.distance(candidate_pos) < MIN_SEPARATION {
+                    too_close = true;
+                    break;
+                }
+            }
+            
+            if !too_close {
+                break;
+            }
+            
+            radius += 50.0;
+            if radius > BASE_DISTANCE * 3.0 {
+                // Give up, use this position even if close
+                break;
+            }
+            candidate_pos = current_pos + dir_vec * radius;
+        }
+        
+        // Create new node with calculated position
+        let sector_type = generate_random_sector_type(rng, distance);
+        let mut new_node = generate_sector(new_node_id, sector_type, rng, distance, candidate_pos);
+        
+        // Connect bidirectionally to the current node
+        new_node.connections.push(node_id);
+        sector_map.sectors.insert(new_node_id, new_node);
+        
+        // Add reverse connection
+        if let Some(current) = sector_map.sectors.get_mut(&node_id) {
+            if !current.connections.contains(&new_node_id) {
+                current.connections.push(new_node_id);
+            }
+        }
+    }
+}
+
+// Helper functions for deterministic hashing
+fn hash_sector_id(id: u32) -> u32 {
+    let mut hash = id;
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x85ebca6b);
+    hash ^= hash >> 13;
+    hash = hash.wrapping_mul(0xc2b2ae35);
+    hash ^= hash >> 16;
+    hash
+}
+
+fn hash_to_float(hash: u32) -> f32 {
+    (hash as f32) / (u32::MAX as f32)
+}
+
 pub fn try_travel_to_sector(
     sector_map: &mut SectorMap,
     game_data: &mut crate::game::GameData,
     target_sector_id: u32,
     event_writer: &mut MessageWriter<events::GameEvent>,
-    mut active_event: ResMut<events::ActiveEvent>,
+    active_event: &mut ResMut<events::ActiveEvent>,
 ) {
     // Check fuel
     if game_data.fuel < 1.0 {
         return;
     }
     
-    // Check if target sector exists and is connected
+    // Check if target node is connected
     if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
         if !current_sector.connections.contains(&target_sector_id) {
             return; // Not connected
         }
     }
     
-    // Generate new sector map if it doesn't exist (this is the exit node to next sector)
+    let source_sector_id = sector_map.current_sector_id;
+    let mut rng = rand::thread_rng();
+    
+    // Generate target node if it doesn't exist (it's a reserved ID)
     if !sector_map.sectors.contains_key(&target_sector_id) {
-        let mut rng = rand::thread_rng();
         let distance = sector_map.distance_traveled + 1;
-        let num_layers = rng.gen_range(5..=7);
-        let mut next_id = target_sector_id;
-        let mut layer_nodes: Vec<Vec<u32>> = Vec::new();
-        
-        // Generate first layer of new sector
         let sector_type = generate_random_sector_type(&mut rng, distance);
-        let starting_sector = generate_sector(next_id, sector_type, &mut rng, distance);
-        sector_map.sectors.insert(next_id, starting_sector);
-        layer_nodes.push(vec![next_id]);
-        next_id += 1;
         
-        // Generate remaining layers
-        for layer in 1..num_layers {
-            let nodes_in_layer = rng.gen_range(2..=4);
-            let mut current_layer = Vec::new();
-            
-            for _ in 0..nodes_in_layer {
-                let sector_type = generate_random_sector_type(&mut rng, distance + layer as u32);
-                let sector = generate_sector(next_id, sector_type, &mut rng, distance + layer as u32);
-                sector_map.sectors.insert(next_id, sector);
-                current_layer.push(next_id);
-                next_id += 1;
-            }
-            
-            // Connect to previous layer
-            let prev_layer = &layer_nodes[layer - 1];
-            for &current_id in &current_layer {
-                let num_connections = rng.gen_range(1..=2.min(prev_layer.len()));
-                let mut connected = std::collections::HashSet::new();
-                let mut connections_to_add = Vec::new();
-                
-                for _ in 0..num_connections {
-                    let target_id = prev_layer[rng.gen_range(0..prev_layer.len())];
-                    if !connected.contains(&target_id) {
-                        connected.insert(target_id);
-                        connections_to_add.push(target_id);
-                    }
-                }
-                
-                if let Some(sector) = sector_map.sectors.get_mut(&current_id) {
-                    sector.connections.extend(connections_to_add.iter().copied());
-                }
-                
-                for &target_id in &connections_to_add {
-                    if let Some(target_sector) = sector_map.sectors.get_mut(&target_id) {
-                        target_sector.connections.push(current_id);
-                    }
-                }
-            }
-            
-            layer_nodes.push(current_layer);
-        }
+        // Calculate position for target node (in direction from source to where target should be)
+        let source_pos = sector_map.sectors.get(&source_sector_id)
+            .map(|s| s.position)
+            .unwrap_or(Vec2::ZERO);
         
-        // Add exit node to the last layer
-        if let Some(last_layer) = layer_nodes.last() {
-            let next_sector_id = next_id;
-            for &sector_id in last_layer {
-                if let Some(sector) = sector_map.sectors.get_mut(&sector_id) {
-                    sector.connections.push(next_sector_id);
-                }
+        // Use deterministic hash to calculate position for non-existent node
+        let target_hash = hash_sector_id(target_sector_id);
+        let angle = hash_to_float(target_hash) * 2.0 * std::f32::consts::PI;
+        let target_pos = source_pos + Vec2::new(angle.cos() * 300.0, angle.sin() * 300.0);
+        
+        let mut new_node = generate_sector(target_sector_id, sector_type, &mut rng, distance, target_pos);
+        
+        // Connect back to source (bidirectional)
+        new_node.connections.push(source_sector_id);
+        sector_map.sectors.insert(target_sector_id, new_node);
+        
+        // Ensure source has connection to target
+        if let Some(source) = sector_map.sectors.get_mut(&source_sector_id) {
+            if !source.connections.contains(&target_sector_id) {
+                source.connections.push(target_sector_id);
             }
         }
     }
     
-    // Travel to sector
+    // Travel to target node
     sector_map.current_sector_id = target_sector_id;
     sector_map.distance_traveled += 1;
     game_data.fuel -= 1.0;
-    game_data.current_sector = target_sector_id;
+    game_data.current_sector = get_sector_number(target_sector_id); // Update sector number procedurally
+    
+    // Check if this is the first time visiting this node BEFORE marking as visited
+    let first_time_here = if let Some(sector) = sector_map.sectors.get(&target_sector_id) {
+        !sector.visited
+    } else {
+        false
+    };
     
     // Mark as visited
     if let Some(sector) = sector_map.sectors.get_mut(&target_sector_id) {
         sector.visited = true;
     }
     
+    // Generate new nodes around the target node (procedural expansion, away from source)
+    // Only expand if this is the first time visiting this node
+    if first_time_here {
+        let distance = sector_map.distance_traveled;
+        generate_nodes_around(sector_map, target_sector_id, Some(source_sector_id), &mut rng, distance);
+    }
+    
     // Automatically trigger event for the new sector
-    events::trigger_event_for_sector(sector_map, target_sector_id, event_writer, &mut *active_event);
+    events::trigger_event_for_sector(sector_map, target_sector_id, event_writer, active_event);
 }
