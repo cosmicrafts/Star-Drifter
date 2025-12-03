@@ -426,17 +426,17 @@ fn handle_all_buttons(
 // ============================================
 
 fn update_hud(
-    mut hud_query: Query<&mut TextSpan, With<HudText>>,
+    mut hud_query: Query<&mut Text, With<HudText>>,
     game_data: Res<GameData>,
     sector_map: Res<crate::sector::SectorMap>,
 ) {
-    if let Ok(mut span) = hud_query.single_mut() {
-        **span = format!(
+    if let Ok(mut text) = hud_query.single_mut() {
+        *text = Text::new(format!(
             "Fuel: {:.1} | Scrap: {} | Distance: {}",
             game_data.fuel,
             game_data.scrap,
             sector_map.distance_traveled
-        );
+        ));
     }
 }
 
@@ -524,12 +524,12 @@ fn update_event_ui(
 }
 
 fn update_sector_info(
-    mut sector_query: Query<&mut TextSpan, (With<SectorText>, Without<HudText>)>,
+    mut sector_query: Query<&mut Text, (With<SectorText>, Without<HudText>)>,
     sector_map: Res<crate::sector::SectorMap>,
 ) {
-    if let Ok(mut span) = sector_query.single_mut() {
-        if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
-            let mut sector_text = format!(
+    if let Ok(mut text) = sector_query.single_mut() {
+        let sector_text = if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
+            let mut text = format!(
                 "Current Sector: {}\nType: {:?}\n{}\n\nExits: ",
                 current_sector.name,
                 current_sector.sector_type,
@@ -538,20 +538,22 @@ fn update_sector_info(
             
             // Show available exits
             if current_sector.connections.is_empty() {
-                sector_text.push_str("Generating...");
+                text.push_str("Generating...");
             } else {
                 for (i, exit_id) in current_sector.connections.iter().enumerate() {
                     if let Some(exit_sector) = sector_map.sectors.get(exit_id) {
-                        sector_text.push_str(&format!("\n{}: {} ({:?})", i + 1, exit_sector.name, exit_sector.sector_type));
+                        text.push_str(&format!("\n{}: {} ({:?})", i + 1, exit_sector.name, exit_sector.sector_type));
                     } else {
-                        sector_text.push_str(&format!("\n{}: Unknown Sector", i + 1));
+                        text.push_str(&format!("\n{}: Unknown Sector", i + 1));
                     }
                 }
             }
             
-            **span = sector_text;
+            text
         } else {
-            **span = "Loading sector...".to_string();
-        }
+            "Loading sector...".to_string()
+        };
+        
+        *text = Text::new(sector_text);
     }
 }
