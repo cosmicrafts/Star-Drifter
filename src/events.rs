@@ -262,7 +262,7 @@ fn create_game_event_from_sector_event(
                         text: "Push through quickly".to_string(),
                         outcome: EventOutcome::Loss { 
                             scrap: 0, 
-                            fuel: 0.5, 
+                            fuel: 1.0, 
                             hull_damage: 5.0 
                         },
                         requirements: vec![],
@@ -386,7 +386,7 @@ fn generate_anomaly_event(danger_level: u32) -> GameEvent {
             EventChoice {
                 text: "Investigate the anomaly".to_string(),
                 outcome: EventOutcome::Reward { 
-                    scrap: (danger_level as i32) * 8, 
+                    scrap: ((danger_level as i32) * 8).max(5), 
                     fuel: 0.0, 
                     crew: None 
                 },
@@ -395,7 +395,7 @@ fn generate_anomaly_event(danger_level: u32) -> GameEvent {
             EventChoice {
                 text: "Scan from a safe distance".to_string(),
                 outcome: EventOutcome::Reward { 
-                    scrap: (danger_level as i32) * 3, 
+                    scrap: ((danger_level as i32) * 3).max(3), 
                     fuel: 0.0, 
                     crew: None 
                 },
@@ -425,7 +425,7 @@ fn generate_derelict_event(danger_level: u32) -> GameEvent {
             EventChoice {
                 text: "Board and explore".to_string(),
                 outcome: EventOutcome::Reward { 
-                    scrap: (danger_level as i32) * 6, 
+                    scrap: ((danger_level as i32) * 6).max(5), 
                     fuel: 1.0, 
                     crew: None 
                 },
@@ -434,7 +434,7 @@ fn generate_derelict_event(danger_level: u32) -> GameEvent {
             EventChoice {
                 text: "Salvage from outside".to_string(),
                 outcome: EventOutcome::Reward { 
-                    scrap: (danger_level as i32) * 3, 
+                    scrap: ((danger_level as i32) * 3).max(3), 
                     fuel: 0.0, 
                     crew: None 
                 },
@@ -534,7 +534,7 @@ fn generate_faction_event(danger_level: u32) -> GameEvent {
                 text: "Try to avoid them".to_string(),
                 outcome: EventOutcome::Loss { 
                     scrap: 0, 
-                    fuel: 1.5, 
+                    fuel: 2.0, 
                     hull_damage: 0.0 
                 },
                 requirements: vec![EventRequirement::Fuel(2.0)],
@@ -646,16 +646,32 @@ pub fn check_requirements(requirements: &[EventRequirement], game_data: &GameDat
 fn apply_outcome(outcome: &EventOutcome, game_data: &mut GameData) {
     match outcome {
         EventOutcome::Reward { scrap, fuel, crew } => {
+            let old_scrap = game_data.scrap;
             game_data.scrap = (game_data.scrap as i32 + scrap).max(0) as u32;
+            let old_fuel = game_data.fuel;
             game_data.fuel = (game_data.fuel + fuel).max(0.0);
+            if *scrap != 0 {
+                println!("Scrap: {} -> {} ({:+})", old_scrap, game_data.scrap, scrap);
+            }
+            if *fuel != 0.0 {
+                println!("Fuel: {:.0} -> {:.0} ({:+.0})", old_fuel, game_data.fuel, fuel);
+            }
             if let Some(crew_name) = crew {
                 println!("New crew member joined: {}", crew_name);
                 // TODO: Add crew member to game data
             }
         }
         EventOutcome::Loss { scrap, fuel, hull_damage } => {
+            let old_scrap = game_data.scrap;
             game_data.scrap = (game_data.scrap as i32 - scrap).max(0) as u32;
+            let old_fuel = game_data.fuel;
             game_data.fuel = (game_data.fuel - fuel).max(0.0);
+            if *scrap != 0 {
+                println!("Scrap: {} -> {} ({})", old_scrap, game_data.scrap, -scrap);
+            }
+            if *fuel != 0.0 {
+                println!("Fuel: {:.0} -> {:.0} ({:+.0})", old_fuel, game_data.fuel, -fuel);
+            }
             if *hull_damage > 0.0 {
                 println!("Hull took {} damage!", hull_damage);
                 // TODO: Apply hull damage to ship

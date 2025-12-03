@@ -432,7 +432,7 @@ fn update_hud(
 ) {
     if let Ok(mut text) = hud_query.single_mut() {
         *text = Text::new(format!(
-            "Fuel: {:.1} | Scrap: {} | Distance: {}",
+            "Fuel: {:.0} | Scrap: {} | Distance: {}",
             game_data.fuel,
             game_data.scrap,
             sector_map.distance_traveled
