@@ -344,30 +344,32 @@ fn handle_sector_navigation(
         return;
     }
     
+    // Improved: More responsive keyboard input handling
     if let Some(current_sector) = sector_map.sectors.get(&sector_map.current_sector_id) {
         let connections = current_sector.connections.clone();
         
         // Handle navigation to all connected nodes using number keys 1-9
+        // Improved: Use array for cleaner key mapping
+        let key_map = [
+            KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3,
+            KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6,
+            KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9,
+        ];
+        
         // All connections are valid - non-existent nodes will be generated on-demand
         for (i, &target_id) in connections.iter().enumerate() {
-            let key = match i {
-                0 => KeyCode::Digit1,
-                1 => KeyCode::Digit2,
-                2 => KeyCode::Digit3,
-                3 => KeyCode::Digit4,
-                4 => KeyCode::Digit5,
-                5 => KeyCode::Digit6,
-                6 => KeyCode::Digit7,
-                7 => KeyCode::Digit8,
-                8 => KeyCode::Digit9,
-                _ => continue,
-            };
+            if i >= key_map.len() {
+                break;
+            }
+            
+            let key = key_map[i];
             
             // Skip if this key was already consumed by event system
             if input_consumed.keys.contains(&key) {
                 continue;
             }
             
+            // Improved: Use just_pressed for immediate, responsive input
             if keyboard.just_pressed(key) {
                 try_travel_to_sector(
                     &mut sector_map,
@@ -376,7 +378,7 @@ fn handle_sector_navigation(
                     &mut event_writer,
                     &mut active_event,
                 );
-                break;
+                break; // Only process first matching key press
             }
         }
     }

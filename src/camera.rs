@@ -29,8 +29,8 @@ fn setup_map_camera(mut commands: Commands) {
         PanCam {
             grab_buttons: vec![MouseButton::Left],
             zoom_to_cursor: true,
-            min_scale: 0.2,
-            max_scale: 3.0,
+            min_scale: 0.1,
+            max_scale: 20.0,
             // No limits on camera position - allow full map exploration
             min_x: f32::NEG_INFINITY,
             max_x: f32::INFINITY,
