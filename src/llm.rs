@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use regex::Regex;
 use serde_json::{Value, json};
 use crate::sector::SectorType;
 use crate::events::{GameEvent, GameEventType};
@@ -171,10 +172,18 @@ fn process_ollama_requests(
             
             match result {
                 Ok(Ok(response)) => {
-                    println!("[LLM] Received response from Ollama");
+                    println!("[LLM] ========================================");
+                    println!("[LLM] ✓ Successfully received response from Ollama");
+                    if let Some(ref pending) = task_state.pending_request {
+                        let crate::llm::LlmRequest::GenerateEvent { ref context } = pending;
+                        println!("[LLM] Response is for sector: {} ({:?})", 
+                            context.sector_name, context.sector_type);
+                    }
                     response_queue.0.push(response);
+                    println!("[LLM] Response pushed to response_queue (queue size: {})", response_queue.0.len());
                     loading_state.is_loading = false;
                     task_state.pending_request = None;
+                    println!("[LLM] ========================================");
                 }
                 Ok(Err(e)) => {
                     eprintln!("[LLM] Ollama request failed: {}. Using fallback event.", e);
@@ -199,7 +208,12 @@ fn process_ollama_requests(
     
     // Process new requests
     if let Some(request) = request_queue.0.pop() {
-        println!("[LLM] Processing Ollama request...");
+        println!("[LLM] ========================================");
+        println!("[LLM] Processing new Ollama request from queue");
+        let LlmRequest::GenerateEvent { ref context } = request;
+        println!("[LLM] Request for sector: {} ({:?})", context.sector_name, context.sector_type);
+        println!("[LLM] Context - Fuel: {}, Scrap: {}, Distance: {}", 
+            context.fuel, context.scrap, context.distance_traveled);
         loading_state.is_loading = true;
         loading_state.loading_text = "Generating event...".to_string();
         
@@ -219,6 +233,13 @@ fn process_ollama_requests(
         });
         
         task_state.task = Some(handle);
+        println!("[LLM] Async task spawned, waiting for Ollama response...");
+        println!("[LLM] ========================================");
+    } else {
+        // Log if there are pending requests but we can't process them
+        if !request_queue.0.is_empty() {
+            println!("[LLM] {} requests in queue, but task already running", request_queue.0.len());
+        }
     }
 }
 
@@ -229,6 +250,11 @@ fn process_llm_responses(
     mut loading_state: ResMut<LlmLoadingState>,
     mut event_history: ResMut<EventHistory>,
 ) {
+    let queue_size = response_queue.0.len();
+    if queue_size > 0 {
+        println!("[LLM] process_llm_responses called with {} response(s) in queue", queue_size);
+    }
+    
     for response in response_queue.0.drain(..) {
         match response {
             LlmResponse::GeneratedEvent { event } => {
@@ -244,18 +270,43 @@ fn process_llm_responses(
                 }
                 println!("[LLM] ========================================");
                 
+                // Log current state before setting new event
+                let current_event_title = active_event.event.as_ref().map(|e| e.title.clone());
+                if let Some(ref title) = current_event_title {
+                    println!("[LLM] WARNING: Overwriting existing active event: \"{}\"", title);
+                } else {
+                    println!("[LLM] No existing active event, setting new one");
+                }
+                
                 let game_event = convert_generated_to_game_event(event);
-                println!("[LLM] Setting active event: \"{}\"", game_event.title);
+                println!("[LLM] About to set active event: \"{}\"", game_event.title);
+                println!("[LLM] Event has {} stages, {} initial choices", 
+                    game_event.stages.len(), 
+                    game_event.choices.len());
+                
                 active_event.event = Some(game_event.clone());
                 active_event.state = crate::events::EventState::Initial;
                 active_event.outcome_history.clear();
+                
+                // Verify it was set
+                if let Some(ref set_event) = active_event.event {
+                    println!("[LLM] ✓ Active event confirmed set to: \"{}\"", set_event.title);
+                } else {
+                    eprintln!("[LLM] ✗ ERROR: Active event was NOT set!");
+                }
+                
                 event_writer.write(game_event.clone());
+                println!("[LLM] Event message written to event_writer");
                 
                 // Track event in history
                 event_history.add_event(game_event.title.clone());
+                println!("[LLM] Event added to history (total: {})", event_history.total_events);
                 
                 loading_state.is_loading = false;
-                println!("[LLM] Event written and active_event updated");
+                println!("[LLM] Loading state set to false");
+                println!("[LLM] ========================================");
+                println!("[LLM] Event lifecycle complete for: \"{}\"", game_event.title);
+                println!("[LLM] ========================================");
             }
         }
     }
@@ -281,9 +332,9 @@ async fn handle_llm_request_ollama(
                 "prompt": prompt,
                 "stream": false,
                 "options": {
-                    "num_predict": 300,
-                    "temperature": 0.9,
-                    "top_p": 0.95,
+                    "num_predict": 2000,
+                    "temperature": 0.8,
+                    "top_p": 0.9,
                     "repeat_penalty": 1.1,
                 }
             });
@@ -490,14 +541,16 @@ RULES:
 - Each stage has 2-4 choices
 - Each choice has an outcome with narrative text and stat changes
 - next_stage: null means event ends, number means go to that stage
-- Rewards: Use "fixed" for exact values, "random" for ranges (min/max)
-- fuel_delta: f32 (can be decimal)
-- scrap_delta: integer (whole numbers only)
-- hull_delta: integer (whole numbers only)
-- Use numbers only: 5 (NOT +5), -5 (negative is fine)
 - Make the event feel complete and satisfying
 
-Generate the JSON now:"#,
+REWARD FORMAT (CRITICAL - follow exactly):
+- Fixed values: {{"type": "fixed", "value": NUMBER}} - Example: {{"type": "fixed", "value": -2.5}}
+- Random ranges: {{"type": "random", "min": NUMBER, "max": NUMBER}} - Example: {{"type": "random", "min": 5, "max": 10}}
+- ALWAYS include "value" key for fixed type!
+- Numbers can be negative: -5, -2.5
+- Do NOT use + prefix: use 5 not +5
+
+Generate ONLY valid JSON, no markdown, no explanation:"#,
         context.sector_name,
         format!("{:?}", context.sector_type),
         sector_type_desc,
@@ -508,6 +561,57 @@ Generate the JSON now:"#,
         context.total_events_seen,
         recent_events_text,
     )
+}
+
+/// Repairs common JSON mistakes made by LLMs
+fn repair_llm_json(text: &str) -> String {
+    let mut json = text.to_string();
+    
+    // 1. Fix malformed fixed values: {"type": "fixed", "NUMBER"} -> {"type": "fixed", "value": NUMBER}
+    // LLMs sometimes generate {"type": "fixed", "-2.5"} instead of {"type": "fixed", "value": -2.5}
+    let fixed_pattern = Regex::new(r#"\{\s*"type"\s*:\s*"fixed"\s*,\s*"([+-]?\d+\.?\d*)"\s*\}"#).unwrap();
+    json = fixed_pattern.replace_all(&json, |caps: &regex::Captures| {
+        let num = &caps[1];
+        format!(r#"{{"type": "fixed", "value": {}}}"#, num)
+    }).to_string();
+    
+    // 2. Fix unquoted numbers after "fixed": {"type": "fixed", -2.5} -> {"type": "fixed", "value": -2.5}
+    let fixed_unquoted = Regex::new(r#"\{\s*"type"\s*:\s*"fixed"\s*,\s*([+-]?\d+\.?\d*)\s*\}"#).unwrap();
+    json = fixed_unquoted.replace_all(&json, |caps: &regex::Captures| {
+        let num = &caps[1];
+        format!(r#"{{"type": "fixed", "value": {}}}"#, num)
+    }).to_string();
+    
+    // 3. Fix trailing commas in arrays: [item,] -> [item]
+    let trailing_comma_array = Regex::new(r#",\s*\]"#).unwrap();
+    json = trailing_comma_array.replace_all(&json, "]").to_string();
+    
+    // 4. Fix trailing commas in objects: {key: value,} -> {key: value}
+    let trailing_comma_object = Regex::new(r#",\s*\}"#).unwrap();
+    json = trailing_comma_object.replace_all(&json, "}").to_string();
+    
+    // 5. Remove + prefix from positive numbers: "value": +5 -> "value": 5
+    let plus_prefix = Regex::new(r#":\s*\+(\d)"#).unwrap();
+    json = plus_prefix.replace_all(&json, ": $1").to_string();
+    
+    // 6. Fix missing closing brackets - try to balance them
+    let open_braces = json.matches('{').count();
+    let close_braces = json.matches('}').count();
+    let open_brackets = json.matches('[').count();
+    let close_brackets = json.matches(']').count();
+    
+    // Add missing closing braces/brackets
+    for _ in 0..(open_braces.saturating_sub(close_braces)) {
+        json.push('}');
+    }
+    for _ in 0..(open_brackets.saturating_sub(close_brackets)) {
+        json.push(']');
+    }
+    
+    // 7. Fix common string escaping issues
+    json = json.replace(r#"\'"#, "'");
+    
+    json
 }
 
 fn parse_llm_response(text: &str) -> Result<LlmResponse, String> {
@@ -525,22 +629,11 @@ fn parse_llm_response(text: &str) -> Result<LlmResponse, String> {
         return Err("No JSON found in response".to_string());
     };
     
-    // Clean up invalid JSON syntax
-    let cleaned_json = json_text
-        .replace(r#": +"#, r#": "#)
-        .replace(r#":+"#, r#": "#)
-        .replace(r#", +"#, r#", "#)
-        .replace(r#" +"#, r#" "#)
-        .lines()
-        .map(|line| {
-            line.replace(r#": +"#, r#": "#)
-                .replace(r#":+"#, r#": "#)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Repair common LLM JSON mistakes
+    let cleaned_json = repair_llm_json(json_text);
     
     println!("[LLM] ========================================");
-    println!("[LLM] EXTRACTED JSON:");
+    println!("[LLM] REPAIRED JSON:");
     println!("[LLM] ========================================");
     println!("{}", cleaned_json);
     println!("[LLM] ========================================");

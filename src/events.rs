@@ -133,12 +133,17 @@ pub fn trigger_event_for_sector(
     event_history: Option<&crate::llm::EventHistory>,
 ) {
     // Only trigger if no event is currently active
-    if active_event.event.is_some() {
+    if let Some(ref existing_event) = active_event.event {
+        println!("[EVENT] trigger_event_for_sector: Skipping - event already active: \"{}\"", existing_event.title);
         return;
     }
     
     if let Some(sector) = sector_map.sectors.get(&sector_id) {
+        println!("[EVENT] trigger_event_for_sector: Sector {} ({:?}) - {}", 
+            sector_id, sector.sector_type, sector.name);
+        
         if let Some(llm_queue) = llm_request_queue {
+            println!("[EVENT] LLM queue available, requesting LLM-generated event");
             // Get event history
             let (recent_titles, total_events) = if let Some(history) = event_history {
                 (history.recent_events.clone(), history.total_events)
@@ -158,26 +163,35 @@ pub fn trigger_event_for_sector(
             };
             
             llm_queue.0.push(crate::llm::LlmRequest::GenerateEvent { context });
+            println!("[EVENT] LLM request queued for sector: {} ({})", sector_id, sector.name);
+            println!("[EVENT] Waiting for LLM response...");
             
             // Don't show placeholder - just queue the request
             // The event will appear when LLM completes
             return;
         }
         
+        println!("[EVENT] LLM not available, using fallback event system");
         // Fallback to old system if LLM is not available
         if !sector.events.is_empty() {
+            println!("[EVENT] Using predefined sector event");
             let mut rng = rand::thread_rng();
             let event_index = rng.gen_range(0..sector.events.len());
             let sector_event = &sector.events[event_index];
             
             let game_event = create_game_event_from_sector_event(sector_event, sector.danger_level);
+            println!("[EVENT] Setting fallback event: \"{}\"", game_event.title);
             active_event.event = Some(game_event.clone());
             event_writer.write(game_event);
+            println!("[EVENT] Fallback event set and written");
         } else {
             // Generate random encounter if sector has no predefined events
+            println!("[EVENT] Generating random event");
             let random_event = generate_random_event(sector.danger_level);
+            println!("[EVENT] Setting random event: \"{}\"", random_event.title);
             active_event.event = Some(random_event.clone());
             event_writer.write(random_event);
+            println!("[EVENT] Random event set and written");
         }
     }
 }
