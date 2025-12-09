@@ -89,18 +89,7 @@ pub enum GameEventType {
 #[derive(Clone)]
 pub struct EventChoice {
     pub text: String,
-    pub outcome: EventOutcome,
     pub requirements: Vec<EventRequirement>,
-}
-
-#[derive(Clone)]
-pub enum EventOutcome {
-    Combat { enemy_faction: Faction, difficulty: u32 },
-    Reward { scrap: i32, fuel: f32, crew: Option<String> },
-    Loss { scrap: i32, fuel: f32, hull_damage: f32 },
-    FactionChange { faction: Faction, change: i32 },
-    Discovery { item: String, description: String },
-    Continue,
 }
 
 #[derive(Clone, Debug)]
@@ -205,7 +194,7 @@ fn _trigger_sector_events(
 
 fn create_game_event_from_sector_event(
     sector_event: &crate::sector::SectorEvent,
-    danger_level: u32,
+    _danger_level: u32,
 ) -> GameEvent {
     match sector_event.event_type {
         crate::sector::EventType::Encounter => {
@@ -219,18 +208,10 @@ fn create_game_event_from_sector_event(
                 choices: vec![
                     EventChoice {
                         text: "Engage in combat".to_string(),
-                        outcome: EventOutcome::Combat { 
-                            enemy_faction: faction.clone(), 
-                            difficulty: danger_level 
-                        },
                         requirements: vec![],
                     },
                     EventChoice {
                         text: "Attempt to negotiate".to_string(),
-                        outcome: EventOutcome::FactionChange { 
-                            faction: faction.clone(), 
-                            change: 1 
-                        },
                         requirements: vec![
                             EventRequirement::CrewSkill { 
                                 _skill_type: "diplomacy".to_string(), 
@@ -240,18 +221,12 @@ fn create_game_event_from_sector_event(
                     },
                     EventChoice {
                         text: "Try to escape".to_string(),
-                        outcome: EventOutcome::Loss { 
-                            scrap: 0, 
-                            fuel: 1.0, 
-                            hull_damage: 0.0 
-                        },
                         requirements: vec![
                             EventRequirement::Fuel(2.0),
                         ],
                     },
                     EventChoice {
                         text: "Ignore and continue".to_string(),
-                        outcome: EventOutcome::Continue,
                         requirements: vec![],
                     },
                 ],
@@ -268,25 +243,14 @@ fn create_game_event_from_sector_event(
                 choices: vec![
                     EventChoice {
                         text: "Investigate carefully".to_string(),
-                        outcome: EventOutcome::Reward { 
-                            scrap: 10 + (danger_level as i32 * 5), 
-                            fuel: 0.0, 
-                            crew: None 
-                        },
                         requirements: vec![],
                     },
                     EventChoice {
                         text: "Quick salvage and leave".to_string(),
-                        outcome: EventOutcome::Reward { 
-                            scrap: 5, 
-                            fuel: 0.0, 
-                            crew: None 
-                        },
                         requirements: vec![],
                     },
                     EventChoice {
                         text: "Ignore and continue".to_string(),
-                        outcome: EventOutcome::Continue,
                         requirements: vec![],
                     },
                 ],
@@ -303,27 +267,16 @@ fn create_game_event_from_sector_event(
                 choices: vec![
                     EventChoice {
                         text: "Offer assistance".to_string(),
-                        outcome: EventOutcome::Reward { 
-                            scrap: 0, 
-                            fuel: 2.0, 
-                            crew: Some("Grateful Survivor".to_string()) 
-                        },
                         requirements: vec![
                             EventRequirement::Scrap(5),
                         ],
                     },
                     EventChoice {
                         text: "Demand payment first".to_string(),
-                        outcome: EventOutcome::Reward { 
-                            scrap: 15, 
-                            fuel: 0.0, 
-                            crew: None 
-                        },
                         requirements: vec![],
                     },
                     EventChoice {
                         text: "Ignore the distress call".to_string(),
-                        outcome: EventOutcome::Continue,
                         requirements: vec![],
                     },
                 ],
@@ -340,11 +293,6 @@ fn create_game_event_from_sector_event(
                 choices: vec![
                     EventChoice {
                         text: "Navigate carefully".to_string(),
-                        outcome: EventOutcome::Loss { 
-                            scrap: 0, 
-                            fuel: 1.0, 
-                            hull_damage: 0.0 
-                        },
                         requirements: vec![
                             EventRequirement::CrewSkill { 
                                 _skill_type: "piloting".to_string(), 
@@ -354,27 +302,16 @@ fn create_game_event_from_sector_event(
                     },
                     EventChoice {
                         text: "Push through quickly".to_string(),
-                        outcome: EventOutcome::Loss { 
-                            scrap: 0, 
-                            fuel: 1.0, 
-                            hull_damage: 5.0 
-                        },
                         requirements: vec![],
                     },
                     EventChoice {
                         text: "Find alternate route".to_string(),
-                        outcome: EventOutcome::Loss { 
-                            scrap: 0, 
-                            fuel: 2.0, 
-                            hull_damage: 0.0 
-                        },
                         requirements: vec![
                             EventRequirement::Fuel(3.0),
                         ],
                     },
                     EventChoice {
                         text: "Avoid the hazard".to_string(),
-                        outcome: EventOutcome::Continue,
                         requirements: vec![],
                     },
                 ],
@@ -392,10 +329,6 @@ fn create_game_event_from_sector_event(
                 choices: vec![
                     EventChoice {
                         text: "Study the ancient technology".to_string(),
-                        outcome: EventOutcome::Discovery { 
-                            item: "Ancient Knowledge".to_string(),
-                            description: "Your crew gains insight into advanced technologies.".to_string(),
-                        },
                         requirements: vec![
                             EventRequirement::CrewSkill { 
                                 _skill_type: "science".to_string(), 
@@ -405,19 +338,10 @@ fn create_game_event_from_sector_event(
                     },
                     EventChoice {
                         text: "Salvage what you can".to_string(),
-                        outcome: EventOutcome::Reward { 
-                            scrap: 20, 
-                            fuel: 0.0, 
-                            crew: None 
-                        },
                         requirements: vec![],
                     },
                     EventChoice {
                         text: "Leave it undisturbed".to_string(),
-                        outcome: EventOutcome::FactionChange { 
-                            faction: faction.clone(), 
-                            change: 2 
-                        },
                         requirements: vec![],
                     },
                 ],
@@ -449,25 +373,14 @@ fn generate_merchant_event() -> GameEvent {
         choices: vec![
             EventChoice {
                 text: "Trade scrap for fuel".to_string(),
-                outcome: EventOutcome::Reward { 
-                    scrap: -10, 
-                    fuel: 3.0, 
-                    crew: None 
-                },
                 requirements: vec![EventRequirement::Scrap(10)],
             },
             EventChoice {
                 text: "Trade fuel for scrap".to_string(),
-                outcome: EventOutcome::Reward { 
-                    scrap: 15, 
-                    fuel: -2.0, 
-                    crew: None 
-                },
                 requirements: vec![EventRequirement::Fuel(2.0)],
             },
             EventChoice {
                 text: "Decline and continue".to_string(),
-                outcome: EventOutcome::Continue,
                 requirements: vec![],
             },
         ],
@@ -475,7 +388,7 @@ fn generate_merchant_event() -> GameEvent {
     }
 }
 
-fn generate_anomaly_event(danger_level: u32) -> GameEvent {
+fn generate_anomaly_event(_danger_level: u32) -> GameEvent {
     GameEvent {
         _event_type: GameEventType::Anomaly,
         title: "Cosmic Anomaly".to_string(),
@@ -485,20 +398,10 @@ fn generate_anomaly_event(danger_level: u32) -> GameEvent {
         choices: vec![
             EventChoice {
                 text: "Investigate the anomaly".to_string(),
-                outcome: EventOutcome::Reward { 
-                    scrap: ((danger_level as i32) * 8).max(5), 
-                    fuel: 0.0, 
-                    crew: None 
-                },
                 requirements: vec![],
             },
             EventChoice {
                 text: "Scan from a safe distance".to_string(),
-                outcome: EventOutcome::Reward { 
-                    scrap: ((danger_level as i32) * 3).max(3), 
-                    fuel: 0.0, 
-                    crew: None 
-                },
                 requirements: vec![
                     EventRequirement::CrewSkill { 
                         _skill_type: "sensors".to_string(), 
@@ -508,7 +411,6 @@ fn generate_anomaly_event(danger_level: u32) -> GameEvent {
             },
             EventChoice {
                 text: "Ignore and continue".to_string(),
-                outcome: EventOutcome::Continue,
                 requirements: vec![],
             },
         ],
@@ -516,7 +418,7 @@ fn generate_anomaly_event(danger_level: u32) -> GameEvent {
     }
 }
 
-fn generate_derelict_event(danger_level: u32) -> GameEvent {
+fn generate_derelict_event(_danger_level: u32) -> GameEvent {
     GameEvent {
         _event_type: GameEventType::Discovery,
         title: "Derelict Ship".to_string(),
@@ -526,25 +428,14 @@ fn generate_derelict_event(danger_level: u32) -> GameEvent {
         choices: vec![
             EventChoice {
                 text: "Board and explore".to_string(),
-                outcome: EventOutcome::Reward { 
-                    scrap: ((danger_level as i32) * 6).max(5), 
-                    fuel: 1.0, 
-                    crew: None 
-                },
                 requirements: vec![],
             },
             EventChoice {
                 text: "Salvage from outside".to_string(),
-                outcome: EventOutcome::Reward { 
-                    scrap: ((danger_level as i32) * 3).max(3), 
-                    fuel: 0.0, 
-                    crew: None 
-                },
                 requirements: vec![],
             },
             EventChoice {
                 text: "Leave it alone".to_string(),
-                outcome: EventOutcome::Continue,
                 requirements: vec![],
             },
         ],
@@ -562,28 +453,14 @@ fn generate_pirate_event(danger_level: u32) -> GameEvent {
         choices: vec![
             EventChoice {
                 text: "Fight the pirates".to_string(),
-                outcome: EventOutcome::Combat { 
-                    enemy_faction: Faction::Spirats, 
-                    difficulty: danger_level + 1 
-                },
                 requirements: vec![],
             },
             EventChoice {
                 text: "Pay tribute".to_string(),
-                outcome: EventOutcome::Loss { 
-                    scrap: (danger_level as i32) * 5, 
-                    fuel: 0.0, 
-                    hull_damage: 0.0 
-                },
                 requirements: vec![EventRequirement::Scrap((danger_level * 5) as u32)],
             },
             EventChoice {
                 text: "Try to outrun them".to_string(),
-                outcome: EventOutcome::Loss { 
-                    scrap: 0, 
-                    fuel: 2.0, 
-                    hull_damage: 2.0 
-                },
                 requirements: vec![
                     EventRequirement::Fuel(3.0),
                     EventRequirement::CrewSkill { 
@@ -594,7 +471,6 @@ fn generate_pirate_event(danger_level: u32) -> GameEvent {
             },
             EventChoice {
                 text: "Ignore and continue".to_string(),
-                outcome: EventOutcome::Continue,
                 requirements: vec![],
             },
         ],
@@ -602,7 +478,7 @@ fn generate_pirate_event(danger_level: u32) -> GameEvent {
     }
 }
 
-fn generate_faction_event(danger_level: u32) -> GameEvent {
+fn generate_faction_event(_danger_level: u32) -> GameEvent {
     let mut rng = rand::thread_rng();
     let faction = match rng.gen_range(0..6) {
         0 => Faction::Cosmicons,
@@ -622,32 +498,18 @@ fn generate_faction_event(danger_level: u32) -> GameEvent {
         choices: vec![
             EventChoice {
                 text: "Hail them peacefully".to_string(),
-                outcome: EventOutcome::FactionChange { 
-                    faction: faction.clone(), 
-                    change: 1 
-                },
                 requirements: vec![],
             },
             EventChoice {
                 text: "Prepare for combat".to_string(),
-                outcome: EventOutcome::Combat { 
-                    enemy_faction: faction.clone(), 
-                    difficulty: danger_level 
-                },
                 requirements: vec![],
             },
             EventChoice {
                 text: "Try to avoid them".to_string(),
-                outcome: EventOutcome::Loss { 
-                    scrap: 0, 
-                    fuel: 2.0, 
-                    hull_damage: 0.0 
-                },
                 requirements: vec![EventRequirement::Fuel(2.0)],
             },
             EventChoice {
                 text: "Ignore and continue".to_string(),
-                outcome: EventOutcome::Continue,
                 requirements: vec![],
             },
         ],
@@ -672,9 +534,6 @@ pub fn process_event_choice(
     choice_idx: usize,
     active_event: &mut ResMut<ActiveEvent>,
     game_data: &mut ResMut<GameData>,
-    llm_queue: Option<&mut crate::llm::LlmRequestQueue>,
-    sector_map: Option<&crate::sector::SectorMap>,
-    event_history: Option<&crate::llm::EventHistory>,
 ) -> bool {
     // Check if we can process (need to borrow event first to check state)
     let can_process = {
@@ -764,7 +623,7 @@ pub fn process_event_choice(
                     event.choices = next_stage_choices.iter().map(|sc| {
                         EventChoice {
                             text: sc.text.clone(),
-                            outcome: EventOutcome::Continue, // Placeholder
+ // Placeholder
                             requirements: vec![],
                         }
                     }).collect();
@@ -798,9 +657,6 @@ fn process_event_choices(
     mut active_event: ResMut<ActiveEvent>,
     mut game_data: ResMut<GameData>,
     mut input_consumed: ResMut<InputConsumed>,
-    mut llm_queue: Option<ResMut<crate::llm::LlmRequestQueue>>,
-    sector_map: Option<Res<crate::sector::SectorMap>>,
-    event_history: Option<Res<crate::llm::EventHistory>>,
 ) {
     if let Some(_event) = &active_event.event {
         let mut choice_selected = None;
@@ -825,16 +681,11 @@ fn process_event_choices(
                 input_consumed.keys.push(key);
             }
             
-                if let Some(sector_map_ref) = sector_map.as_ref() {
-                    process_event_choice(
-                        choice_idx, 
-                        &mut active_event, 
-                        &mut game_data,
-                        llm_queue.as_deref_mut(),
-                        Some(sector_map_ref),
-                        event_history.as_deref(),
-                    );
-                }
+            process_event_choice(
+                choice_idx, 
+                &mut active_event, 
+                &mut game_data,
+            );
         }
     }
 }
@@ -864,54 +715,3 @@ pub fn check_requirements(requirements: &[EventRequirement], game_data: &GameDat
     true
 }
 
-fn apply_outcome(outcome: &EventOutcome, game_data: &mut GameData) {
-    match outcome {
-        EventOutcome::Reward { scrap, fuel, crew } => {
-            let old_scrap = game_data.scrap;
-            game_data.scrap = (game_data.scrap as i32 + scrap).max(0) as u32;
-            let old_fuel = game_data.fuel;
-            game_data.fuel = (game_data.fuel + fuel).max(0.0);
-            if *scrap != 0 {
-                println!("Scrap: {} -> {} ({:+})", old_scrap, game_data.scrap, scrap);
-            }
-            if *fuel != 0.0 {
-                println!("Fuel: {:.0} -> {:.0} ({:+.0})", old_fuel, game_data.fuel, fuel);
-            }
-            if let Some(crew_name) = crew {
-                println!("New crew member joined: {}", crew_name);
-                // TODO: Add crew member to game data
-            }
-        }
-        EventOutcome::Loss { scrap, fuel, hull_damage } => {
-            let old_scrap = game_data.scrap;
-            game_data.scrap = (game_data.scrap as i32 - scrap).max(0) as u32;
-            let old_fuel = game_data.fuel;
-            game_data.fuel = (game_data.fuel - fuel).max(0.0);
-            if *scrap != 0 {
-                println!("Scrap: {} -> {} ({})", old_scrap, game_data.scrap, -scrap);
-            }
-            if *fuel != 0.0 {
-                println!("Fuel: {:.0} -> {:.0} ({:+.0})", old_fuel, game_data.fuel, -fuel);
-            }
-            if *hull_damage > 0.0 {
-                println!("Hull took {} damage!", hull_damage);
-                // TODO: Apply hull damage to ship
-            }
-        }
-        EventOutcome::Combat { enemy_faction, difficulty } => {
-            println!("Combat initiated with {} (difficulty: {})!", enemy_faction.name(), difficulty);
-            // TODO: Implement combat system
-        }
-        EventOutcome::FactionChange { faction, change } => {
-            println!("Faction relation with {} changed by {}", faction.name(), change);
-            // TODO: Update faction relations
-        }
-        EventOutcome::Discovery { item, description } => {
-            println!("Discovery: {} - {}", item, description);
-            // TODO: Add discovery to inventory/log
-        }
-        EventOutcome::Continue => {
-            println!("You continue on your journey...");
-        }
-    }
-}

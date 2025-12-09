@@ -634,8 +634,6 @@ fn handle_all_buttons(
     windows: Query<&Window>,
     mut active_event: ResMut<crate::events::ActiveEvent>,
     mut game_data: ResMut<GameData>,
-    mut llm_queue: Option<ResMut<crate::llm::LlmRequestQueue>>,
-    event_history: Option<Res<crate::llm::EventHistory>>,
 ) {
     // Center button
     for interaction in center_btn.iter() {
@@ -680,9 +678,6 @@ fn handle_all_buttons(
                 choice.choice_index, 
                 &mut active_event, 
                 &mut game_data,
-                llm_queue.as_deref_mut(),
-                Some(sector_map.as_ref()),
-                event_history.as_deref(),
             );
         }
     }

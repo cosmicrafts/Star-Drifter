@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use serde_json::{Value, json};
 use crate::sector::SectorType;
-use crate::events::{GameEvent, GameEventType, EventChoice, EventOutcome};
+use crate::events::{GameEvent, GameEventType};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -228,7 +228,6 @@ fn process_llm_responses(
     mut active_event: ResMut<crate::events::ActiveEvent>,
     mut loading_state: ResMut<LlmLoadingState>,
     mut event_history: ResMut<EventHistory>,
-    mut game_data: ResMut<crate::game::GameData>,
 ) {
     for response in response_queue.0.drain(..) {
         match response {
@@ -358,10 +357,8 @@ fn convert_generated_to_game_event(generated: GeneratedEvent) -> GameEvent {
     
     // Convert initial stage choices to EventChoice format for display
     let initial_choices: Vec<crate::events::EventChoice> = initial_stage.choices.iter().map(|c| {
-        // Create a placeholder outcome - actual outcome will be processed when choice is made
         crate::events::EventChoice {
             text: c.text.clone(),
-            outcome: crate::events::EventOutcome::Continue, // Placeholder
             requirements: vec![],
         }
     }).collect();
