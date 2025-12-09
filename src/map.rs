@@ -347,6 +347,7 @@ fn handle_node_clicks(
     mut game_data: ResMut<crate::game::GameData>,
     mut event_writer: MessageWriter<crate::events::GameEvent>,
     mut active_event: ResMut<crate::events::ActiveEvent>,
+    pending_trigger: ResMut<crate::sector::PendingEventTrigger>,
 ) {
     // Don't process clicks during events
     if active_event.event.is_some() {
@@ -397,6 +398,7 @@ fn handle_node_clicks(
                     target_id,
                     &mut event_writer,
                     &mut active_event,
+                    Some(pending_trigger),
                 );
             }
         }

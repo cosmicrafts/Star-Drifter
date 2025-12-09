@@ -12,10 +12,12 @@ pub struct SectorPlugin;
 impl Plugin for SectorPlugin {
     fn build(&self, app: &mut App) {
         app
+            .insert_resource(PendingEventTrigger::default())
             .add_systems(Startup, setup_sector_map)
             .configure_sets(Update, NavigationSystemSet.after(crate::events::EventSystemSet))
             .add_systems(Update, (
                 handle_sector_navigation,
+                trigger_events_after_navigation,
             ).in_set(NavigationSystemSet));
     }
 }
@@ -337,6 +339,7 @@ fn handle_sector_navigation(
     mut event_writer: MessageWriter<crate::events::GameEvent>,
     mut active_event: ResMut<crate::events::ActiveEvent>,
     input_consumed: Res<crate::events::InputConsumed>,
+    pending_trigger: ResMut<PendingEventTrigger>,
 ) {
     // Don't allow navigation if an event is currently active
     // Numbers should only be used for event choices when an event is active
@@ -377,6 +380,7 @@ fn handle_sector_navigation(
                     target_id,
                     &mut event_writer,
                     &mut active_event,
+                    Some(pending_trigger),
                 );
                 break; // Only process first matching key press
             }
@@ -571,12 +575,18 @@ fn hash_to_float(hash: u32) -> f32 {
     (hash as f32) / (u32::MAX as f32)
 }
 
+#[derive(Resource, Default)]
+pub struct PendingEventTrigger {
+    pub sector_id: Option<u32>,
+}
+
 pub fn try_travel_to_sector(
     sector_map: &mut SectorMap,
     game_data: &mut crate::game::GameData,
     target_sector_id: u32,
-    event_writer: &mut MessageWriter<events::GameEvent>,
-    active_event: &mut ResMut<events::ActiveEvent>,
+    _event_writer: &mut MessageWriter<events::GameEvent>,
+    _active_event: &mut ResMut<events::ActiveEvent>,
+    pending_trigger: Option<ResMut<PendingEventTrigger>>,
 ) {
     // Check fuel
     if game_data.fuel < 1.0 {
@@ -647,6 +657,33 @@ pub fn try_travel_to_sector(
         generate_nodes_around(sector_map, target_sector_id, Some(source_sector_id), &mut rng, distance);
     }
     
-    // Automatically trigger event for the new sector
-    events::trigger_event_for_sector(sector_map, target_sector_id, event_writer, active_event);
+    // Mark that we need to trigger an event for this sector
+    if let Some(mut trigger) = pending_trigger {
+        trigger.sector_id = Some(target_sector_id);
+    }
+}
+
+/// System to trigger events after navigation completes
+fn trigger_events_after_navigation(
+    sector_map: Res<crate::sector::SectorMap>,
+    pending_trigger: Option<ResMut<PendingEventTrigger>>,
+    mut event_writer: MessageWriter<events::GameEvent>,
+    mut active_event: ResMut<events::ActiveEvent>,
+    game_data: Res<crate::game::GameData>,
+    mut llm_request_queue: Option<ResMut<crate::llm::LlmRequestQueue>>,
+    event_history: Option<Res<crate::llm::EventHistory>>,
+) {
+    if let Some(mut trigger) = pending_trigger {
+        if let Some(sector_id) = trigger.sector_id.take() {
+            events::trigger_event_for_sector(
+                &sector_map,
+                sector_id,
+                &mut event_writer,
+                &mut active_event,
+                &game_data,
+                llm_request_queue.as_deref_mut(),
+                event_history.as_deref(),
+            );
+        }
+    }
 }

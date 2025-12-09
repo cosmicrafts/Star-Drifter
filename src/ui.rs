@@ -19,6 +19,7 @@ impl Plugin for UIPlugin {
                 handle_all_buttons,
                 update_hud,
                 update_fps_overlay,
+                update_loading_ui.run_if(in_state(GameState::Playing)),
                 update_event_ui.run_if(in_state(GameState::Playing)).after(handle_all_buttons),
                 update_sector_info.run_if(in_state(GameState::Playing)),
             ));
@@ -70,6 +71,12 @@ pub struct CameraZoomOutButton;
 #[derive(Component)]
 struct FpsText;
 
+#[derive(Component)]
+struct LoadingPanel;
+
+#[derive(Component)]
+struct LoadingText;
+
 // ============================================
 // THEME - Cosmic Space Aesthetic
 // ============================================
@@ -110,6 +117,7 @@ fn setup_all_ui(mut commands: Commands) {
     setup_camera_buttons(&mut commands);
     setup_sector_info(&mut commands);
     setup_event_ui(&mut commands);
+    setup_loading_ui(&mut commands);
     setup_controls_text(&mut commands);
     setup_fps_overlay(&mut commands);
 }
@@ -440,6 +448,69 @@ fn setup_event_ui(commands: &mut Commands) {
     });
 }
 
+fn setup_loading_ui(commands: &mut Commands) {
+    commands.spawn((
+        LoadingPanel,
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(80.0),
+            left: px(80.0),
+            right: px(80.0),
+            max_height: px(200.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::all(px(40.0)),
+            row_gap: px(20.0),
+            border: UiRect::all(px(3.0)),
+            ..default()
+        },
+        GlobalZIndex(100),
+        BorderRadius::all(px(16.0)),
+        BackgroundGradient::from(LinearGradient {
+            angle: std::f32::consts::FRAC_PI_4,
+            stops: vec![
+                PANEL_BG.into(),
+                Color::srgba(0.06, 0.08, 0.14, 0.95).into(),
+                PANEL_BG.into(),
+            ],
+            ..default()
+        }),
+        BorderColor::all(ACCENT_CYAN),
+        shadow(0.8, 8.0, 24.0),
+        Visibility::Hidden,
+    )).with_children(|panel| {
+        // Loading text
+        panel.spawn((
+            LoadingText,
+            Text::new("Generating event..."),
+            TextFont { font_size: 24.0, ..default() },
+            TextColor(ACCENT_CYAN),
+            TextShadow { color: Color::BLACK.with_alpha(0.9), offset: Vec2::new(2.0, 2.0) },
+        ));
+        
+        // Animated dots (simple visual indicator)
+        panel.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: px(8.0),
+            align_items: AlignItems::Center,
+            ..default()
+        }).with_children(|dots| {
+            for _ in 0..3 {
+                dots.spawn((
+                    Node {
+                        width: px(12.0),
+                        height: px(12.0),
+                        ..default()
+                    },
+                    BorderRadius::all(px(6.0)),
+                    BackgroundColor(ACCENT_CYAN),
+                ));
+            }
+        });
+    });
+}
+
 fn setup_controls_text(commands: &mut Commands) {
     commands.spawn((
         Node {
@@ -563,6 +634,8 @@ fn handle_all_buttons(
     windows: Query<&Window>,
     mut active_event: ResMut<crate::events::ActiveEvent>,
     mut game_data: ResMut<GameData>,
+    mut llm_queue: Option<ResMut<crate::llm::LlmRequestQueue>>,
+    event_history: Option<Res<crate::llm::EventHistory>>,
 ) {
     // Center button
     for interaction in center_btn.iter() {
@@ -603,7 +676,14 @@ fn handle_all_buttons(
     // Event choice buttons
     for (interaction, choice) in event_btns.iter() {
         if *interaction == Interaction::Pressed {
-            crate::events::process_event_choice(choice.choice_index, &mut active_event, &mut game_data);
+            crate::events::process_event_choice(
+                choice.choice_index, 
+                &mut active_event, 
+                &mut game_data,
+                llm_queue.as_deref_mut(),
+                Some(sector_map.as_ref()),
+                event_history.as_deref(),
+            );
         }
     }
 }
@@ -628,8 +708,29 @@ fn update_hud(
     }
 }
 
+fn update_loading_ui(
+    loading_state: Res<crate::llm::LlmLoadingState>,
+    mut loading_panel: Query<&mut Visibility, With<LoadingPanel>>,
+    mut loading_text: Query<&mut Text, With<LoadingText>>,
+) {
+    if let Ok(mut vis) = loading_panel.single_mut() {
+        if loading_state.is_loading {
+            *vis = Visibility::Visible;
+        } else {
+            *vis = Visibility::Hidden;
+        }
+    }
+    
+    if let Ok(mut text) = loading_text.single_mut() {
+        if !loading_state.loading_text.is_empty() {
+            *text = Text::new(loading_state.loading_text.clone());
+        }
+    }
+}
+
 fn update_event_ui(
     active_event: Res<ActiveEvent>,
+    loading_state: Res<crate::llm::LlmLoadingState>,
     game_data: Res<GameData>,
     mut vis_params: ParamSet<(
         Query<&mut Visibility, With<EventPanel>>,
@@ -642,6 +743,14 @@ fn update_event_ui(
         Query<&mut Text>,
     )>,
 ) {
+    // Hide event panel while loading
+    if loading_state.is_loading {
+        if let Ok(mut vis) = vis_params.p0().single_mut() {
+            *vis = Visibility::Hidden;
+        }
+        return;
+    }
+    
     // Toggle panel visibility
     if let Ok(mut vis) = vis_params.p0().single_mut() {
         if active_event.event.is_some() {

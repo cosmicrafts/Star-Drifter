@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::{factions::FactionsPlugin, ship::ShipPlugin, sector::SectorPlugin, map::MapPlugin, camera::CameraPlugin, events::EventsPlugin, ui::UIPlugin};
+use crate::{factions::FactionsPlugin, ship::ShipPlugin, sector::SectorPlugin, map::MapPlugin, camera::CameraPlugin, events::EventsPlugin, ui::UIPlugin, llm::LlmPlugin};
 
 pub struct GamePlugin;
 
@@ -15,6 +15,7 @@ impl Plugin for GamePlugin {
                 CameraPlugin,
                 EventsPlugin,
                 UIPlugin,
+                LlmPlugin,
             ))
             .add_systems(Startup, setup_game)
             .add_systems(Update, (

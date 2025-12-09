@@ -8,6 +8,7 @@ mod map;
 mod camera;
 mod events;
 mod ui;
+mod llm;
 
 use game::GamePlugin;
 
