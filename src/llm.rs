@@ -63,7 +63,9 @@ pub struct OllamaTaskState {
 impl Default for OllamaTaskState {
     fn default() -> Self {
         Self {
-            runtime: Arc::new(Runtime::new().expect("Failed to create tokio runtime")),
+            runtime: Arc::new(
+                Runtime::new().expect("Failed to create tokio runtime")
+            ),
             task: None,
             pending_request: None,
         }
@@ -163,12 +165,15 @@ fn process_ollama_requests(
     // Check if there's an active task
     let task_finished = task_state.task.as_ref().map(|t| t.is_finished()).unwrap_or(false);
     if task_finished {
+        println!("[LLM] Task finished, retrieving result...");
         if let Some(task) = task_state.task.take() {
             // Task completed, get the result
+            // Since is_finished() is true, we can safely await it
+            // Use runtime.block_on but we need to be careful about deadlocks
             let runtime = task_state.runtime.clone();
-            let result = runtime.block_on(async {
-                task.await
-            });
+            println!("[LLM] Blocking on task result...");
+            let result = runtime.block_on(task);
+            println!("[LLM] Got result from task");
             
             match result {
                 Ok(Ok(response)) => {
@@ -227,14 +232,19 @@ fn process_ollama_requests(
         // Store request for fallback
         task_state.pending_request = Some(request.clone());
         
-        // Spawn async task
-        let handle = runtime.spawn(async move {
-            handle_llm_request_ollama(request_clone, config_clone.url, config_clone.model).await
+        // Spawn async task using the runtime handle
+        let handle = runtime.handle().spawn(async move {
+            println!("[LLM] Task started, calling Ollama...");
+            let result = handle_llm_request_ollama(request_clone, config_clone.url, config_clone.model).await;
+            println!("[LLM] Task completed with result: {}", if result.is_ok() { "OK" } else { "ERROR" });
+            result
         });
         
         task_state.task = Some(handle);
         println!("[LLM] Async task spawned, waiting for Ollama response...");
         println!("[LLM] ========================================");
+    } else if task_state.task.is_some() {
+        // Task is still running - no need to log every frame
     } else {
         // Log if there are pending requests but we can't process them
         if !request_queue.0.is_empty() {
