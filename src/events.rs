@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use rand::Rng;
 use crate::factions::Faction;
-use crate::game::GameData;
+use crate::game::{GameData, GameState};
 use crate::llm::LlmRequestQueue;
 
 pub struct EventsPlugin;
@@ -17,10 +17,10 @@ impl Plugin for EventsPlugin {
             .insert_resource(InputConsumed::default())
             .configure_sets(Update, EventSystemSet.before(crate::sector::NavigationSystemSet))
             .add_systems(Update, (
-                handle_game_events,
-                process_event_choices,
+                handle_game_events.run_if(in_state(GameState::Playing)),
+                process_event_choices.run_if(in_state(GameState::Playing)),
             ).in_set(EventSystemSet))
-            .add_systems(Update, clear_consumed_input.after(crate::sector::NavigationSystemSet));
+            .add_systems(Update, clear_consumed_input.run_if(in_state(GameState::Playing)).after(crate::sector::NavigationSystemSet));
     }
 }
 

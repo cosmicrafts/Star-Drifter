@@ -3,6 +3,7 @@ use rand::Rng;
 use std::collections::HashMap;
 use crate::factions::{Faction, generate_random_encounter};
 use crate::events;
+use crate::game::GameState;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NavigationSystemSet;
@@ -16,8 +17,8 @@ impl Plugin for SectorPlugin {
             .add_systems(Startup, setup_sector_map)
             .configure_sets(Update, NavigationSystemSet.after(crate::events::EventSystemSet))
             .add_systems(Update, (
-                handle_sector_navigation,
-                trigger_events_after_navigation,
+                handle_sector_navigation.run_if(in_state(GameState::Playing)),
+                trigger_events_after_navigation.run_if(in_state(GameState::Playing)),
             ).in_set(NavigationSystemSet));
     }
 }
@@ -114,6 +115,13 @@ fn get_sector_number(node_id: u32) -> u32 {
 }
 
 fn setup_sector_map(mut commands: Commands) {
+    let sector_map = create_initial_sector_map();
+    commands.insert_resource(sector_map);
+}
+
+/// Creates a fresh sector map with initial sectors
+/// Used both for initial setup and restart
+fn create_initial_sector_map() -> SectorMap {
     let mut sectors = HashMap::new();
     let mut rng = rand::thread_rng();
     
@@ -152,12 +160,18 @@ fn setup_sector_map(mut commands: Commands) {
         next_id += 1;
     }
     
-    commands.insert_resource(SectorMap {
+    SectorMap {
         current_sector_id: starting_node_id,
         sectors,
         distance_traveled: 0,
         next_node_id: next_id,
-    });
+    }
+}
+
+/// Resets the sector map to initial state (used on game restart)
+pub fn reset_sector_map(sector_map: &mut SectorMap) {
+    let new_map = create_initial_sector_map();
+    *sector_map = new_map;
 }
 
 

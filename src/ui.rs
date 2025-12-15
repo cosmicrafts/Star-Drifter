@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use crate::game::{GameState, GameData};
 use crate::events::ActiveEvent;
+use crate::factions::{Faction, PlayerFaction};
 use std::collections::HashMap;
 
 // ============================================
@@ -17,12 +18,18 @@ impl Plugin for UIPlugin {
             .add_systems(Update, (
                 update_button_styles,
                 handle_all_buttons,
+                handle_faction_selection_buttons,
                 update_hud,
                 update_fps_overlay,
                 update_loading_ui.run_if(in_state(GameState::Playing)),
                 update_event_ui.run_if(in_state(GameState::Playing)).after(handle_all_buttons),
                 update_sector_info.run_if(in_state(GameState::Playing)),
-            ));
+                update_faction_selection_visibility,
+            ))
+            .add_systems(OnEnter(GameState::FactionSelection), setup_faction_selection_ui)
+            .add_systems(OnExit(GameState::FactionSelection), cleanup_faction_selection_ui)
+            .add_systems(OnEnter(GameState::Paused), setup_pause_menu)
+            .add_systems(OnExit(GameState::Paused), cleanup_pause_menu);
     }
 }
 
@@ -77,6 +84,23 @@ struct LoadingPanel;
 #[derive(Component)]
 struct LoadingText;
 
+#[derive(Component)]
+struct FactionSelectionPanel;
+
+#[derive(Component)]
+pub struct FactionSelectionButton {
+    pub faction: Faction,
+}
+
+#[derive(Component)]
+struct PauseMenuPanel;
+
+#[derive(Component)]
+pub struct ResumeButton;
+
+#[derive(Component)]
+pub struct RestartButton;
+
 // ============================================
 // THEME - Cosmic Space Aesthetic
 // ============================================
@@ -120,6 +144,7 @@ fn setup_all_ui(mut commands: Commands) {
     setup_loading_ui(&mut commands);
     setup_controls_text(&mut commands);
     setup_fps_overlay(&mut commands);
+    // Faction selection UI is set up when entering FactionSelection state
 }
 
 fn setup_hud(commands: &mut Commands) {
@@ -583,6 +608,10 @@ fn update_button_styles(
               (Changed<Interaction>, Or<(With<CameraCenterButton>, With<CameraZoomInButton>, With<CameraZoomOutButton>)>)>,
         Query<(&Interaction, &mut BackgroundColor, &mut BorderColor),
               (Changed<Interaction>, With<EventChoiceButton>)>,
+        Query<(&Interaction, &mut BackgroundColor, &mut BorderColor),
+              (Changed<Interaction>, With<FactionSelectionButton>)>,
+        Query<(&Interaction, &mut BackgroundColor, &mut BorderColor),
+              (Changed<Interaction>, Or<(With<ResumeButton>, With<RestartButton>)>)>,
     )>,
 ) {
     // Camera buttons
@@ -620,6 +649,42 @@ fn update_button_styles(
             }
         }
     }
+
+    // Faction selection buttons
+    for (interaction, mut bg, mut border) in buttons.p2().iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                *bg = BTN_PRESS.into();
+                *border = BorderColor::all(ACCENT_GOLD);
+            }
+            Interaction::Hovered => {
+                *bg = BTN_HOVER.into();
+                *border = BorderColor::all(ACCENT_CYAN);
+            }
+            Interaction::None => {
+                *bg = BTN_NORMAL.into();
+                *border = BorderColor::all(ACCENT_CYAN_DIM);
+            }
+        }
+    }
+
+    // Pause menu buttons (Resume and Restart)
+    for (interaction, mut bg, mut border) in buttons.p3().iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                *bg = BTN_PRESS.into();
+                *border = BorderColor::all(ACCENT_GOLD);
+            }
+            Interaction::Hovered => {
+                *bg = BTN_HOVER.into();
+                *border = BorderColor::all(ACCENT_CYAN);
+            }
+            Interaction::None => {
+                *bg = BTN_NORMAL.into();
+                *border = BorderColor::all(ACCENT_CYAN_DIM);
+            }
+        }
+    }
 }
 
 fn handle_all_buttons(
@@ -627,6 +692,8 @@ fn handle_all_buttons(
     zoom_in_btn: Query<&Interaction, (Changed<Interaction>, With<CameraZoomInButton>)>,
     zoom_out_btn: Query<&Interaction, (Changed<Interaction>, With<CameraZoomOutButton>)>,
     event_btns: Query<(&Interaction, &EventChoiceButton), (Changed<Interaction>, With<EventChoiceButton>)>,
+    resume_btn: Query<&Interaction, (Changed<Interaction>, With<ResumeButton>)>,
+    restart_btn: Query<&Interaction, (Changed<Interaction>, With<RestartButton>)>,
     mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<Button>)>,
     pan_cam: Query<&bevy_pancam::PanCam>,
     sector_map: Res<crate::sector::SectorMap>,
@@ -634,6 +701,7 @@ fn handle_all_buttons(
     windows: Query<&Window>,
     mut active_event: ResMut<crate::events::ActiveEvent>,
     mut game_data: ResMut<GameData>,
+    mut next_state: ResMut<NextState<GameState>>,
 ) {
     // Center button
     for interaction in center_btn.iter() {
@@ -679,6 +747,20 @@ fn handle_all_buttons(
                 &mut active_event, 
                 &mut game_data,
             );
+        }
+    }
+
+    // Resume button
+    for interaction in resume_btn.iter() {
+        if *interaction == Interaction::Pressed {
+            next_state.set(GameState::Playing);
+        }
+    }
+
+    // Restart button
+    for interaction in restart_btn.iter() {
+        if *interaction == Interaction::Pressed {
+            next_state.set(GameState::FactionSelection);
         }
     }
 }
@@ -824,5 +906,235 @@ fn update_sector_info(
                 *text = Text::new(content);
             }
         }
+    }
+}
+
+// ============================================
+// FACTION SELECTION UI
+// ============================================
+
+fn setup_faction_selection_ui(mut commands: Commands) {
+    commands.spawn((
+        FactionSelectionPanel,
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            height: percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            flex_direction: FlexDirection::Column,
+            row_gap: px(20.0),
+            padding: UiRect::all(px(40.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.9)),
+    )).with_children(|panel| {
+        // Title
+        panel.spawn((
+            Text::new("Choose Your Faction"),
+            TextFont { font_size: 48.0, ..default() },
+            TextColor(ACCENT_GOLD),
+            TextShadow { color: Color::BLACK.with_alpha(0.9), offset: Vec2::new(3.0, 3.0) },
+            Node { margin: UiRect::bottom(px(40.0)), ..default() },
+        ));
+
+        // Subtitle
+        panel.spawn((
+            Text::new("Select a faction to begin your journey in the Dark Rift"),
+            TextFont { font_size: 20.0, ..default() },
+            TextColor(TEXT_DIM),
+            TextShadow { color: Color::BLACK.with_alpha(0.7), offset: Vec2::splat(1.5) },
+            Node { margin: UiRect::bottom(px(60.0)), ..default() },
+        ));
+
+        // Faction buttons container
+        panel.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: bevy::ui::FlexWrap::Wrap,
+            column_gap: px(20.0),
+            row_gap: px(20.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            max_width: px(1000.0),
+            ..default()
+        }).with_children(|buttons| {
+            // 6 factions: Cosmicons, Spirats, Webes, Celestials, Archs, Spades
+            let factions = vec![
+                Faction::Cosmicons,
+                Faction::Spirats,
+                Faction::Webes,
+                Faction::Celestials,
+                Faction::Archs,
+                Faction::Spades,
+            ];
+
+            for faction in factions {
+                buttons.spawn((
+                    FactionSelectionButton { faction: faction.clone() },
+                    Button,
+                    Node {
+                        width: px(200.0),
+                        min_height: px(120.0),
+                        padding: UiRect::all(px(20.0)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(3.0)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(12.0),
+                        ..default()
+                    },
+                    BorderRadius::all(px(12.0)),
+                    BackgroundColor(BTN_NORMAL),
+                    BorderColor::all(ACCENT_CYAN_DIM),
+                    shadow(0.6, 4.0, 12.0),
+                )).with_children(|btn| {
+                    btn.spawn((
+                        Text::new(faction.name()),
+                        TextFont { font_size: 24.0, ..default() },
+                        TextColor(ACCENT_CYAN),
+                        TextShadow { color: Color::BLACK.with_alpha(0.8), offset: Vec2::splat(2.0) },
+                    ));
+                });
+            }
+        });
+    });
+}
+
+fn cleanup_faction_selection_ui(
+    mut commands: Commands,
+    panel_query: Query<Entity, With<FactionSelectionPanel>>,
+) {
+    for entity in panel_query.iter() {
+        commands.entity(entity).despawn();
+    }
+}
+
+fn handle_faction_selection_buttons(
+    mut interaction_query: Query<(&Interaction, &FactionSelectionButton), (Changed<Interaction>, With<Button>)>,
+    mut player_faction: ResMut<PlayerFaction>,
+    mut next_state: ResMut<NextState<GameState>>,
+) {
+    for (interaction, button) in interaction_query.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            player_faction.faction = Some(button.faction.clone());
+            next_state.set(GameState::Playing);
+        }
+    }
+}
+
+fn update_faction_selection_visibility(
+    mut panel_query: Query<&mut Visibility, With<FactionSelectionPanel>>,
+    state: Res<State<GameState>>,
+) {
+    if let Ok(mut visibility) = panel_query.single_mut() {
+        match state.get() {
+            GameState::FactionSelection => {
+                *visibility = Visibility::Visible;
+            }
+            _ => {
+                *visibility = Visibility::Hidden;
+            }
+        }
+    }
+}
+
+// ============================================
+// PAUSE MENU UI
+// ============================================
+
+fn setup_pause_menu(mut commands: Commands) {
+    commands.spawn((
+        PauseMenuPanel,
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            height: percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            flex_direction: FlexDirection::Column,
+            row_gap: px(20.0),
+            padding: UiRect::all(px(40.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
+        GlobalZIndex(200), // Higher than everything else
+    )).with_children(|panel| {
+        // Title
+        panel.spawn((
+            Text::new("PAUSED"),
+            TextFont { font_size: 56.0, ..default() },
+            TextColor(ACCENT_GOLD),
+            TextShadow { color: Color::BLACK.with_alpha(0.9), offset: Vec2::new(3.0, 3.0) },
+            Node { margin: UiRect::bottom(px(40.0)), ..default() },
+        ));
+
+        // Buttons container
+        panel.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(16.0),
+            align_items: AlignItems::Center,
+            ..default()
+        }).with_children(|buttons| {
+            // Resume button
+            buttons.spawn((
+                ResumeButton,
+                Button,
+                Node {
+                    width: px(250.0),
+                    min_height: px(60.0),
+                    padding: UiRect::all(px(20.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(px(3.0)),
+                    ..default()
+                },
+                BorderRadius::all(px(12.0)),
+                BackgroundColor(BTN_NORMAL),
+                BorderColor::all(ACCENT_CYAN_DIM),
+                shadow(0.6, 4.0, 12.0),
+            )).with_children(|btn| {
+                btn.spawn((
+                    Text::new("Resume (ESC)"),
+                    TextFont { font_size: 24.0, ..default() },
+                    TextColor(ACCENT_CYAN),
+                    TextShadow { color: Color::BLACK.with_alpha(0.8), offset: Vec2::splat(2.0) },
+                ));
+            });
+
+            // Restart button
+            buttons.spawn((
+                RestartButton,
+                Button,
+                Node {
+                    width: px(250.0),
+                    min_height: px(60.0),
+                    padding: UiRect::all(px(20.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(px(3.0)),
+                    ..default()
+                },
+                BorderRadius::all(px(12.0)),
+                BackgroundColor(BTN_NORMAL),
+                BorderColor::all(ACCENT_GOLD),
+                shadow(0.6, 4.0, 12.0),
+            )).with_children(|btn| {
+                btn.spawn((
+                    Text::new("Restart Game"),
+                    TextFont { font_size: 24.0, ..default() },
+                    TextColor(ACCENT_GOLD),
+                    TextShadow { color: Color::BLACK.with_alpha(0.8), offset: Vec2::splat(2.0) },
+                ));
+            });
+        });
+    });
+}
+
+fn cleanup_pause_menu(
+    mut commands: Commands,
+    panel_query: Query<Entity, With<PauseMenuPanel>>,
+) {
+    for entity in panel_query.iter() {
+        commands.entity(entity).despawn();
     }
 }

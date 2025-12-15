@@ -45,6 +45,11 @@ pub struct FactionRelations {
     _relations: std::collections::HashMap<(Faction, Faction), RelationLevel>,
 }
 
+#[derive(Resource)]
+pub struct PlayerFaction {
+    pub faction: Option<Faction>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelationLevel {
     Hostile,
@@ -111,6 +116,7 @@ fn setup_factions(mut commands: Commands) {
     relations.insert((Faction::Archs, Faction::Spades), RelationLevel::Allied);
 
     commands.insert_resource(FactionRelations { _relations: relations });
+    commands.insert_resource(PlayerFaction { faction: None });
 }
 
 fn update_faction_relations(
