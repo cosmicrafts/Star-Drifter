@@ -1,5 +1,5 @@
 'use strict';
-/* Star Drifter — FTL-like roguelike (vanilla JS + canvas, zero deps).
+/* Star Drifter — node-map space roguelike (vanilla JS + canvas, zero deps).
  * Port of the Bevy design: node map, click-to-travel (1 fuel/jump),
  * events with choices + requirements, fuel/scrap/hull, 6 factions,
  * 10 sector types, procedural expansion. No LLM: static event deck
