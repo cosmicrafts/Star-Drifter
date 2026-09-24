@@ -199,9 +199,8 @@ const G = {
   activeEvent: null, outcome: null,
   best: +(localStorage.getItem('sd-best') || 0),
   rng: mulberry32(1),
-  stars: [],
+  mouse: { x: 0.5, y: 0.5 }, // normalized hover, far-layer drift
 };
-for (let i = 0; i < 200; i++) G.stars.push({ x: Math.random(), y: Math.random(), s: Math.random() * 1.5 + 0.4 });
 
 function sectorType(rng, distance) {
   const df = Math.min(5, distance / 10);
@@ -440,6 +439,109 @@ function banner(html) {
   banner._t = setTimeout(() => b.classList.add('hidden'), 2600);
 }
 
+// ---------- parallax galaxy: procedural layers, infinite, self-culling ----------
+// Each layer lives in camera space scaled by f: only visible cells are hashed,
+// so off-screen stars are never computed (frustum culling by construction).
+const LAYERS = [
+  { f: 0.15, cell: 190, sMin: 0.5, sMax: 1.2, a: 0.45, tint: 0.05 },
+  { f: 0.35, cell: 150, sMin: 0.8, sMax: 1.9, a: 0.65, tint: 0.08 },
+  { f: 0.6, cell: 115, sMin: 1.2, sMax: 2.7, a: 0.9, tint: 0.11 },
+];
+const TINTS = ['#7dd3fc', '#fcd34d', '#c4b5fd']; // sparse blue/amber/violet
+function hash2(x, y, salt) {
+  let h = ((x * 374761393 + y * 668265263 + salt * 974634211) >>> 0);
+  h = (h ^ (h >>> 13)) >>> 0; h = (h * 1274126177) >>> 0; h = (h ^ (h >>> 16)) >>> 0;
+  return h / 0xFFFFFFFF;
+}
+function drawStars(t) {
+  const { x: cx, y: cy, z } = G.cam;
+  for (let li = 0; li < LAYERS.length; li++) {
+    const L = LAYERS[li];
+    // hover drift: far layers breathe with the pointer (±14px on the farthest)
+    const hov = li === 0 ? 14 : li === 1 ? 6 : 0;
+    const ox = (G.mouse.x - 0.5) * hov, oy = (G.mouse.y - 0.5) * hov;
+    const vx0 = cx * L.f - W / 2 / z, vx1 = cx * L.f + W / 2 / z;
+    const vy0 = cy * L.f - H / 2 / z, vy1 = cy * L.f + H / 2 / z;
+    const c0x = Math.floor(vx0 / L.cell), c1x = Math.floor(vx1 / L.cell);
+    const c0y = Math.floor(vy0 / L.cell), c1y = Math.floor(vy1 / L.cell);
+    for (let gx = c0x; gx <= c1x; gx++) {
+      for (let gy = c0y; gy <= c1y; gy++) {
+        const h1 = hash2(gx, gy, li * 7 + 1);
+        if (h1 > 0.72) continue; // density: ~72% of cells hold a star
+        const wx = (gx + hash2(gx, gy, li * 7 + 2)) * L.cell;
+        const wy = (gy + hash2(gx, gy, li * 7 + 3)) * L.cell;
+        const sx = (wx - cx * L.f) * z + W / 2 + ox * z;
+        const sy = (wy - cy * L.f) * z + H / 2 + oy * z;
+        const size = (L.sMin + hash2(gx, gy, li * 7 + 4) * (L.sMax - L.sMin)) * z;
+        if (size < 0.4) continue;
+        const tw = 0.75 + 0.25 * Math.sin(t * (1 + hash2(gx, gy, li * 7 + 5) * 2) + h1 * TAU);
+        ctx.globalAlpha = L.a * tw;
+        ctx.fillStyle = hash2(gx, gy, li * 7 + 6) < L.tint
+          ? TINTS[Math.floor(hash2(gx, gy, li * 7 + 7) * TINTS.length)]
+          : TH.ink;
+        ctx.fillRect(sx, sy, size, size);
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+// Nebula wash: prerendered once, screen-blended, barely-there alphas.
+const NEB_SPRITES = [];
+function makeNebula(colorInner) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+  grad.addColorStop(0, colorInner);
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 256, 256);
+  return c;
+}
+function drawNebulas(t) {
+  if (!NEB_SPRITES.length) {
+    NEB_SPRITES.push({ img: makeNebula('rgba(109,88,246,0.16)'), s: 620 }, // indigo
+      { img: makeNebula('rgba(34,150,180,0.13)'), s: 520 },                 // teal
+      { img: makeNebula('rgba(150,90,220,0.11)'), s: 720 });                // violet
+  }
+  const { x: cx, y: cy, z } = G.cam;
+  const f = 0.25, cell = 950;
+  const vx0 = cx * f - W / 2 / z - cell, vx1 = cx * f + W / 2 / z + cell;
+  const vy0 = cy * f - H / 2 / z - cell, vy1 = cy * f + H / 2 / z + cell;
+  ctx.globalCompositeOperation = 'screen';
+  for (let gx = Math.floor(vx0 / cell); gx <= Math.floor(vx1 / cell); gx++) {
+    for (let gy = Math.floor(vy0 / cell); gy <= Math.floor(vy1 / cell); gy++) {
+      const h = hash2(gx, gy, 99);
+      if (h > 0.55) continue;
+      const sp = NEB_SPRITES[Math.floor(hash2(gx, gy, 98) * NEB_SPRITES.length)];
+      const wx = (gx + 0.5 + (hash2(gx, gy, 97) - 0.5) * 0.6) * cell;
+      const wy = (gy + 0.5 + (hash2(gx, gy, 96) - 0.5) * 0.6) * cell;
+      const sx = (wx - cx * f) * z + W / 2, sy = (wy - cy * f) * z + H / 2;
+      const s = sp.s * z * (0.8 + h);
+      ctx.globalAlpha = 0.5 + 0.1 * Math.sin(t * 0.4 + h * TAU);
+      ctx.drawImage(sp.img, sx - s / 2, sy - s / 2, s, s);
+    }
+  }
+  // congruency: nebula-sector boost + dark-rift vignette
+  const cur = G.nodes.get(G.current);
+  if (cur && G.screen === 'play') {
+    if (cur.type === 'Nebula') {
+      ctx.globalAlpha = 0.35;
+      const s = 500 * z;
+      ctx.drawImage(NEB_SPRITES[0].img, W / 2 - s / 2, H / 2 - s / 2, s, s);
+    } else if (cur.type === 'DarkRift') {
+      const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, `rgba(88,40,140,${0.22 + 0.06 * Math.sin(t * 2)})`);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+}
+
 // ---------- input: pan/zoom/click + keys ----------
 const drag = { on: false, sx: 0, sy: 0, cx: 0, cy: 0, moved: false };
 function toWorld(px, py) {
@@ -450,6 +552,7 @@ canvas.addEventListener('pointerdown', e => {
   drag.sx = e.clientX; drag.sy = e.clientY; drag.cx = G.cam.x; drag.cy = G.cam.y;
 });
 window.addEventListener('pointermove', e => {
+  if (e.pointerType !== 'touch') { G.mouse.x = e.clientX / W; G.mouse.y = e.clientY / H; }
   if (!drag.on) return;
   const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
   if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
@@ -494,26 +597,26 @@ for (const k of new Set(Object.values(SECTOR_STYLE).map(s => s.icon))) {
 // ---------- render ----------
 function draw() {
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = TH.ink;
-  for (const st of G.stars) {
-    ctx.globalAlpha = 0.2 + st.s * 0.3;
-    ctx.fillRect(st.x * W, st.y * H, st.s, st.s);
-  }
-  ctx.globalAlpha = 1;
+  const t = performance.now() / 1000;
+  drawNebulas(t);
+  drawStars(t);
   if (G.screen === 'menu' || G.faction === null && G.screen !== 'play') return;
   const { x: cx, y: cy, z } = G.cam;
   const X = wx => (wx - cx) * z + W / 2;
   const Y = wy => (wy - cy) * z + H / 2;
-  // links
+  // links (frustum-culled: skip when both ends are off-screen)
   for (const n of G.nodes.values()) {
     for (const l of n.links) {
       if (l < n.id) continue;
       const m = G.nodes.get(l);
+      const x1 = X(n.x), y1 = Y(n.y), x2 = X(m.x), y2 = Y(m.y);
+      if ((x1 < -40 && x2 < -40) || (x1 > W + 40 && x2 > W + 40) ||
+          (y1 < -40 && y2 < -40) || (y1 > H + 40 && y2 > H + 40)) continue;
       const isCur = n.id === G.current || m.id === G.current;
       const bothVis = n.visited && m.visited;
       ctx.strokeStyle = isCur ? hexA(TH.green, 0.85) : bothVis ? hexA(TH.faint, 0.4) : hexA(TH.muted, 0.35);
       ctx.lineWidth = isCur ? 2.5 : 1.2;
-      ctx.beginPath(); ctx.moveTo(X(n.x), Y(n.y)); ctx.lineTo(X(m.x), Y(m.y)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     }
   }
   // nodes
