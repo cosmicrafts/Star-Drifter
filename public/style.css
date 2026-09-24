@@ -116,3 +116,33 @@ html, body {
 #b-actions .btn { flex: 1 1 auto; padding: 0.55rem 0.4rem; font-size: 11px; }
 #b-log { flex-basis: 100%; max-height: 110px; overflow-y: auto; font-size: 11px; color: var(--muted);
   background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.4rem 0.5rem; }
+
+/* codec (MGS-style dialogue) */
+#codec {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+  display: flex; gap: 0.7rem; align-items: flex-start;
+  background: linear-gradient(180deg, transparent, rgba(2,6,16,0.92) 30%);
+  padding: 2.2rem 1rem 1rem; min-height: 150px;
+}
+#codec-portrait {
+  width: 84px; height: 84px; flex: none;
+  border: 1px solid var(--accent); border-radius: 8px; overflow: hidden;
+  background: var(--surface-1);
+  box-shadow: 0 0 18px var(--accent-wash);
+}
+#codec-portrait svg { width: 100%; height: 100%; display: block; }
+#codec-body { flex: 1; min-width: 0; }
+#codec-name { font-size: 11px; letter-spacing: 0.25em; color: var(--accent-soft); font-weight: 900; margin-bottom: 0.3rem; }
+#codec-text {
+  font-size: 14px; line-height: 1.55; color: var(--ink); min-height: 44px;
+  text-shadow: 0 1px 2px #000;
+}
+#codec-choices { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.6rem; }
+#codec-choices .btn { padding: 0.5rem 0.7rem; font-size: 11px; }
+#s-actions {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+  display: flex; gap: 0.4rem; justify-content: center; padding: 0.6rem;
+  background: linear-gradient(180deg, transparent, rgba(2,6,16,0.85));
+}
+#s-actions .btn { padding: 0.55rem 0.8rem; font-size: 11px; }
+#s-actions.with-codec { bottom: 165px; background: none; }

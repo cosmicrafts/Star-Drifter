@@ -23,7 +23,7 @@
       <p class="hint">Click a connected node to jump (1 fuel) · pan by dragging · wheel to zoom · keys 1-4 pick event choices</p>
     </div>
 
-    <!-- Event modal -->
+    <!-- Event modal (legacy, unused) -->
     <div id="modal" class="overlay hidden">
       <div id="m-card" class="card">
         <p class="kicker" id="m-sub"></p>
@@ -33,15 +33,16 @@
       </div>
     </div>
 
-    <!-- Battle -->
-    <div id="battle" class="overlay hidden">
-      <div id="b-card" class="card">
-        <p class="kicker">[ SHIP COMBAT ]</p>
-        <div id="b-foe"></div>
-        <div id="b-actions"></div>
-        <div id="b-player"></div>
+    <!-- Codec dialogue (MGS-style) -->
+    <div id="codec" class="hidden">
+      <div id="codec-portrait"></div>
+      <div id="codec-body">
+        <div id="codec-name">???</div>
+        <div id="codec-text"></div>
+        <div id="codec-choices"></div>
       </div>
     </div>
+    <div id="s-actions" class="hidden"></div>
 
     <!-- Game over -->
     <div id="over" class="overlay hidden">

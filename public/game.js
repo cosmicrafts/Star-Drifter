@@ -107,7 +107,7 @@ const EVENTS = {
   distress: {
     title: 'Distress Beacon', desc: 'A damaged ship requests assistance.',
     choices: [
-      { t: 'Answer the call', req: {}, out: [['Grateful crew pays in fuel. +6 fuel, +4 scrap.', [6, 4, 0]], ['A trap! Spirats spring the ambush.', [0, 0, 0], { battle: 'trap' }]] },
+      { t: 'Answer the call', req: {}, maybeTrap: true, out: [['Grateful crew pays in fuel. +6 fuel, +4 scrap.', [6, 4, 0]]] },
       { t: 'Cautious approach (2 fuel)', req: { fuel: 2 }, out: [['Real survivors. They reward caution. +5 scrap.', [-2, 5, 0]], ['Trap spotted in time. You burn away. -2 fuel.', [-2, 0, 0]]] },
       { t: 'Ignore and continue', req: {}, out: [['You drift on.', [0, 0, 0]]] },
     ],
@@ -234,10 +234,23 @@ function startBattle(who, foeKey, stance) {
     player, enemy, log: [], parleyTicks: stance === 'parley' ? 8 : 0,
     surrenderOffered: false, tribute: Math.max(4, Math.round((TRIBUTE[who] || 8) * (G.faction.id === 'spirats' && who === 'pirates' ? 0.5 : 1))),
   };
-  hideModal();
-  battleEl.classList.remove('hidden');
-  blog(`⚔️ ${foe.name} blocks your path!`);
-  if (stance === 'parley') blog('📻 They hail you. Talk or open fire — holding position.');
+  // link actors: player ship + last foe actor get live hp bars
+  const S = G.scene;
+  if (S) {
+    S.player.hp = B.player;
+    let foeActor = S.actors.filter(a => a.kind === 'pirate' || a.kind === 'patrol' || a.kind === 'drone').reverse()[0];
+    if (!foeActor) {
+      // stage a visual enemy so the scene always shows the ship you're fighting
+      const foekind = who === 'patrol' ? 'patrol' : who === 'combat' ? 'drone' : 'pirate';
+      foeActor = mkActor(foekind, S.anchor.x + 160, S.anchor.y - 20, {
+        color: who === 'patrol' ? '#a5b4fc' : who === 'combat' ? '#e879f9' : '#f0abfc',
+      });
+      S.actors.push(foeActor);
+    }
+    foeActor.hp = B.enemy; foeActor.foe = true;
+  }
+  const sp = who === 'pirates' || who === 'trap' ? SPEAKERS.pirate : who === 'patrol' ? SPEAKERS.patrol : SPEAKERS.logging;
+  codecSay({ ...sp, text: stance === 'parley' ? 'Holding position. Talk, pay tribute, or open fire — your call, Drifter.' : `${foe.name} blocks your path! Weapons hot, hold steady.` });
   paintBattle();
   B.timer = setInterval(battleTick, 600);
   window.__sd.battle = B;
@@ -268,6 +281,7 @@ function battleTick() {
           if (B.parleyTicks > 0) { w.charge = w.cd; continue; } // holding fire during parley
           fireWeapon(ship, w, foe, ['weapons', 'engines', 'shields'][Math.floor(Math.random() * 3)]);
         }
+        if (!B || B.over) return; // this shot may have ended the battle
       }
     }
   }
@@ -292,13 +306,30 @@ function battleTick() {
   paintBattle();
 }
 function fireWeapon(ship, w, foe, targetSys) {
+  const S = G.scene;
+  const A = ship.side === 'player' ? S?.player : S?.actors[S.actors.length - 2];
+  const Ta = shieldVisualFor(foe);
+  if (A && Ta && Ta.kind !== 'player') {
+    spawnShot(A, Ta, w.color, w.key === 'missile' ? 5 : 3);
+  }
   const evade = foe.sys.engines >= 2 && Math.random() < 0.2;
-  if (evade || Math.random() > 0.85) { blog(`${ship.side === 'player' ? 'You' : foe.name} miss${ship.side === 'player' ? '' : 'es'} (${w.name}).`); return; }
+  if (evade || Math.random() > 0.85) {
+    if (A && Ta) floatText(Ta.x, Ta.y - 30, 'MISS', '#94a3b8');
+    blog(`${ship.side === 'player' ? 'You' : foe.name} miss${ship.side === 'player' ? '' : 'es'} (${w.name}).`);
+    return;
+  }
   let dmg = w.dmg, sysDmg = w.sys;
-  if (foe.sh > 0 && dmg > 0) { foe.sh--; dmg--; blog(`🛡️ Shield absorbs ${w.name}.`); if (dmg <= 0 && w.key !== 'missile') return; }
+  if (foe.sh > 0 && dmg > 0) {
+    foe.sh--; dmg--;
+    if (Ta) { Ta.shieldFlash = 1; }
+    if (Ta) floatText(Ta.x, Ta.y - 30, 'SHIELD', '#7dd3fc');
+    if (dmg <= 0 && w.key !== 'missile') return;
+  }
   if (dmg > 0) {
     foe.hull -= dmg;
-    blog(`${ship.side === 'player' ? '💥 Hit!' : '🔥 Hull hit!'} ${w.name} → ${dmg} (${foe.name} ${Math.max(0, foe.hull)}).`);
+    if (Ta) { Ta.hitFlash = 1; burst(Ta.x, Ta.y, w.key === 'missile' ? '#fb923c' : '#f87171', w.key === 'missile' ? 22 : 12); }
+    if (Ta) floatText(Ta.x, Ta.y - 30, `-${dmg}`, '#f87171');
+    if (w.key !== 'ion' && Math.random() < 0.65 && Ta) burst(Ta.x, Ta.y, '#fbbf24', 6); // sparks
   }
   if (sysDmg > 0 && Math.random() < 0.65) {
     const sys = w.key === 'ion' ? targetSys : ['weapons', 'engines', 'shields'][Math.floor(Math.random() * 3)];
@@ -309,6 +340,11 @@ function fireWeapon(ship, w, foe, targetSys) {
   }
   if (foe.side === 'player') { G.hull = Math.max(0, B.player.hull); paintHUD(); }
   if (foe.hull <= 0) return endBattle(foe.side === 'foe' ? 'victory' : 'defeat');
+}
+function shieldVisualFor(ship) {
+  if (!G.scene) return null;
+  if (ship.side === 'player') return G.scene.player;
+  return G.scene.actors[G.scene.actors.length - 2] || G.scene.actors[0];
 }
 // auto-crew: repair damaged systems first, else man weapons, else bridge. No manual orders.
 function crewAI(ship) {
@@ -334,33 +370,50 @@ function endBattle(result) {
   B.over = true;
   clearInterval(B.timer);
   G.hull = Math.max(0, B.player.hull);
-  battleEl.classList.add('hidden');
+  document.getElementById('s-actions').classList.add('hidden');
   const foe = B.enemy;
+  const S = G.scene;
+  const foeActor = S ? S.actors.filter(a => a.foe || a.kind === 'pirate' || a.kind === 'patrol' || a.kind === 'drone').reverse()[0] : null;
   if (result === 'victory') {
+    if (foeActor) { foeActor.dead = true; burst(foeActor.x, foeActor.y, '#fb923c', 40); burst(foeActor.x, foeActor.y, '#f87171', 24); }
+    floatText(foeActor ? foeActor.x : W / 2, foeActor ? foeActor.y : H / 2, 'DESTROYED', '#f87171');
     G.kills++;
     const loot = lootFor(B.who);
     const drop = Math.random() < 0.3 ? foe.weapons[Math.floor(Math.random() * foe.weapons.length)].key : null;
     const ev = {
-      title: `${foe.name} Destroyed`, desc: `Salvage secured. +${loot[0]} fuel, +${loot[1]} scrap.${drop ? ` They carried a ${WEAPONS[drop].name}!` : ''}`,
+      title: `${foe.name} Destroyed`,
+      desc: `Salvage secured. +${loot[0]} fuel, +${loot[1]} scrap.${drop ? ` They carried a ${WEAPONS[drop].name}!` : ''}`,
       choices: drop
         ? [{ t: `Take the ${WEAPONS[drop].name}`, req: {}, loot, swap: drop, out: [[`Weapon installed.`, loot]] },
            { t: 'Leave it, take salvage', req: {}, loot, out: [[`Salvage secured.`, loot]] }]
         : [{ t: 'Collect salvage', req: {}, loot, out: [[`Salvage secured.`, loot]] }],
     };
-    G.activeEvent = ev;
+    setTimeout(() => {
+      codecSay({ ...SPEAKERS.self, text: ev.desc, choices: codecChoicesFor(ev) });
+    }, 900);
     paintHUD();
-    showModal();
   } else if (result === 'defeat') {
-    gameOver(`${foe.name} tore your ship apart.`);
+    const pa = S ? S.player : null;
+    if (pa) { pa.dead = true; burst(pa.x, pa.y, '#f87171', 50); }
+    setTimeout(() => gameOver(`${foe.name} tore your ship apart.`), 1200);
   } else if (result === 'fled') {
     G.fuel = Math.max(0, G.fuel - 2);
     paintHUD();
+    if (S) {
+      const pa = S.player;
+      const run = setInterval(() => { pa.x -= 26; }, 50);
+      setTimeout(() => clearInterval(run), 500);
+    }
     banner('Burned 2 fuel to escape.');
+    setTimeout(exitScene, 900);
   } else if (result === 'escaped') {
+    if (foeActor) { const run = setInterval(() => { foeActor.x += 26; }, 50); setTimeout(() => clearInterval(run), 500); }
     banner(`${foe.name} escaped.`);
+    setTimeout(exitScene, 900);
   } else if (result === 'deal') {
     paintHUD();
     banner('Deal struck. You part ways.');
+    setTimeout(exitScene, 900);
   }
   B = null;
   window.__sd.battle = null;
@@ -416,24 +469,22 @@ function bTalk(mode) {
     const intimidate = G.kills * 0.12 + (B.enemy.hull < B.enemy.maxHull * 0.6 ? 0.35 : 0);
     if (Math.random() < 0.25 + intimidate) {
       const loot = lootFor(B.who);
-      blog(`😤 They yield! +${loot[0]} fuel, +${loot[1]} scrap.`);
-      G.activeEvent = { key: '__loot', nodeId: G.current, ev: { title: 'Tribute Paid', desc: 'They hand over cargo and withdraw.', choices: [{ t: 'Take it', req: {}, loot, out: [['Tribute secured.', loot]] }] } };
+      const ev = { title: 'Tribute Paid', desc: 'They hand over cargo and withdraw.', choices: [{ t: 'Take it', req: {}, loot, out: [['Tribute secured.', loot]] }] };
       B.over = true; clearInterval(B.timer);
-      battleEl.classList.add('hidden');
       B = null; window.__sd.battle = null;
-      paintHUD(); showModal();
+      paintHUD();
+      codecSay({ ...SPEAKERS.pirate, text: ev.desc, choices: codecChoicesFor(ev) });
     } else {
-      blog('😡 They laugh at your demand. Weapons free!');
-      B.stance = 'hostile'; B.parleyTicks = 0; B.player.autofireOff = false;
+      codecSay({ ...SPEAKERS.pirate, text: 'You dare? Weapons free!' });
     }
   } else if (mode === 'accept') {
     const loot = [Math.floor(B.enemy.maxHull / 6), Math.floor(B.enemy.maxHull / 2), 0];
     blog(`🏳️ Surrender accepted. +${loot[0]} fuel, +${loot[1]} scrap.`);
     G.activeEvent = { key: '__loot', nodeId: G.current, ev: { title: 'Surrender Accepted', desc: 'They jettison cargo and limp away.', choices: [{ t: 'Take it', req: {}, loot, out: [['Cargo secured.', loot]] }] } };
     B.over = true; clearInterval(B.timer);
-    battleEl.classList.add('hidden');
     B = null; window.__sd.battle = null;
-    paintHUD(); showModal();
+    paintHUD();
+    codecSay({ ...SPEAKERS.self, text: ev.desc, choices: codecChoicesFor(ev) });
   } else if (mode === 'refuse') {
     B.paused = false; B.stance = 'hostile';
     blog('🔥 No mercy. Finish them!');
@@ -441,53 +492,228 @@ function bTalk(mode) {
   paintBattle();
 }
 
-function sysPips(ship) {
-  return ['weapons', 'engines', 'shields'].map(s =>
-    `<span class="sys ${ship.sys[s] ? '' : 'off'}" title="${SYS_LABEL[s]}">${SYS_LABEL[s]}${'●'.repeat(ship.sys[s])}${'○'.repeat(2 - ship.sys[s])}</span>`).join('');
-}
-function shipCard(ship, foe) {
-  const hullPct = Math.max(0, Math.round(100 * ship.hull / ship.maxHull));
-  const weapons = ship.weapons.map(w => {
-    const pct = Math.min(100, Math.round(100 * w.charge / w.cd));
-    const ammo = w.ammoLeft != null ? ` ×${w.ammoLeft}` : '';
-    return `<div class="wrow"><span style="color:${w.color}">▮ ${w.name}${ammo}</span><div class="wbar"><i style="width:${pct}%;background:${w.color}"></i></div></div>`;
-  }).join('');
-  const rooms = ['weapons', 'engines', 'shields', 'bridge'].map(r => {
-    const here = ship.crew.filter(c => c.station === (r === 'bridge' ? 'bridge' : r));
-    const dots = here.map(c => `<span class="cdot" title="${c.name}: ${c.task}">${c.name[0]}</span>`).join('');
-    return `<div class="room" data-r="${r}"><b>${r === 'bridge' ? 'BRD' : SYS_LABEL[r]}</b>${dots}</div>`;
-  }).join('');
-  const tasks = ship.crew.map(c => `<div class="ctask">${c.name}: ${c.task}</div>`).join('');
-  const sh = '⬢'.repeat(ship.sh) + '◇'.repeat(Math.max(0, ship.maxSh - ship.sh));
-  return `<div class="ship ${foe ? 'foe' : ''}">
-    <div class="shead"><b>${ship.name}</b><span class="shp">${sh}</span></div>
-    <div class="hbar"><i style="width:${hullPct}%"></i><span>${Math.max(0, Math.ceil(ship.hull))}/${ship.maxHull}</span></div>
-    <div class="sysrow">${sysPips(ship)}</div>
-    <div class="wlist">${weapons}</div>
-    <div class="rooms">${rooms}</div>
-    <div class="crewlog">${tasks || '<div class="ctask">No crew — automated.</div>'}</div>
-  </div>`;
-}
+// slim action bar over the scene (ships/bars live on canvas now)
 function paintBattle() {
-  if (!B) return;
-  const foe = document.getElementById('b-foe'), pl = document.getElementById('b-player'), act = document.getElementById('b-actions');
-  foe.innerHTML = shipCard(B.enemy, true);
-  pl.innerHTML = shipCard(B.player, false);
+  if (!B) { document.getElementById('s-actions').classList.add('hidden'); return; }
+  const act = document.getElementById('s-actions');
+  act.classList.remove('hidden');
   let btns = '';
   if (B.paused && B.surrenderOffered) {
-    btns = `<button class="btn btn-primary" onclick="bTalk('accept')">Accept surrender</button>
-      <button class="btn" onclick="bTalk('refuse')">No mercy</button>`;
+    codecSay({ name: B.enemy.name, color: '#f87171', glyph: '☠', text: 'We surrender! Take our cargo and let us live.',
+      choices: [{ t: 'Accept surrender', fn: () => bTalk('accept') }, { t: 'No mercy', fn: () => bTalk('refuse') }] });
+    btns = '';
   } else if (B.stance === 'parley' && B.parleyTicks > 0) {
-    btns = `<button class="btn btn-primary" onclick="bTalk('fire')">🔥 Open fire</button>
-      <button class="btn" onclick="bTalk('demand')">😤 Demand tribute</button>
-      <button class="btn" onclick="bTalk('pay')">🤝 Pay ${B.tribute} scrap</button>`;
+    btns = `<button class="btn btn-primary" onclick="bTalk('fire')">🔥 OPEN FIRE</button>
+      <button class="btn" onclick="bTalk('demand')">😤 TRIBUTE</button>
+      <button class="btn" onclick="bTalk('pay')">🤝 ${B.tribute}⛁</button>`;
   } else {
     btns = `<button class="btn" onclick="bTarget()">🎯 ${SYS_LABEL[B.player.target]}</button>
-      <button class="btn" onclick="bTalk('talk')">📻 Talk</button>
-      <button class="btn" onclick="bFlee()">💨 Flee</button>
+      <button class="btn" onclick="bTalk('talk')">📻 TALK</button>
+      <button class="btn" onclick="bFlee()">💨 FLEE</button>
       <button class="btn" onclick="bPause()">${B.paused ? '▶' : '⏸'}</button>`;
   }
-  act.innerHTML = btns + `<div id="b-log">${B.log.join('')}</div>`;
+  act.innerHTML = btns;
+  act.classList.toggle('with-codec', !document.getElementById('codec').classList.contains('hidden'));
+}
+
+// ---------- codec dialogue (MGS-style) ----------
+const codecEl = document.getElementById('codec');
+function glyphSVG(glyph, color) {
+  return `<svg viewBox="0 0 84 84">
+    <defs><radialGradient id="pg" cx="35%" cy="30%"><stop offset="0%" stop-color="${hexA(color, 0.35)}"/><stop offset="100%" stop-color="rgba(2,6,16,0.9)"/></radialGradient></defs>
+    <rect width="84" height="84" fill="url(#pg)"/>
+    <path d="M0,8 H84 M0,24 H84 M0,40 H84 M0,56 H84 M0,72 H84" stroke="${hexA(color, 0.15)}" stroke-width="1"/>
+    <text x="42" y="58" text-anchor="middle" font-size="44" fill="${color}" style="text-shadow:0 0 8px ${color}">${glyph}</text>
+    <rect width="84" height="84" fill="none" stroke="${hexA(color, 0.5)}"/>
+  </svg>`;
+}
+function codecPortrait(sp, t) {
+  const el = document.getElementById('codec-portrait');
+  el.innerHTML = glyphSVG(sp.glyph || '✦', sp.color || '#22d3ee');
+  const svg = el.firstChild;
+  const textEl = svg.querySelector('text');
+  textEl.setAttribute('y', 58 + Math.sin(t * 6) * 1.5);
+  svg.style.opacity = 0.8 + 0.2 * Math.sin(t * 8);
+}
+let codecTimer = null;
+function codecSay(sp, t) {
+  codecEl.classList.remove('hidden');
+  document.getElementById('s-actions').classList.add('with-codec');
+  if (codecTimer) clearInterval(codecTimer);
+  document.getElementById('codec-name').textContent = sp.name || '???';
+  codecPortrait(sp, 0);
+  let t0 = performance.now();
+  const port = () => codecPortrait(sp, (performance.now() - t0) / 1000);
+  let portTick = setInterval(port, 90);
+  codecTimer = portTick;
+  const textEl = document.getElementById('codec-text');
+  textEl.textContent = '';
+  const full = sp.text || '';
+  let i = 0;
+  const typer = setInterval(() => {
+    i += 2;
+    textEl.textContent = full.slice(0, i);
+    if (i % 8 === 0) {
+      try { blip(520 + (full.charCodeAt(i % full.length) % 5) * 40); } catch (e) { }
+    }
+    if (i >= full.length) {
+      clearInterval(typer);
+      const box = document.getElementById('codec-choices');
+      box.innerHTML = '';
+      (sp.choices || []).forEach((c, ci) => {
+        const b = document.createElement('button');
+        b.className = 'btn' + (c.primary ? ' btn-primary' : '');
+        b.innerHTML = `<b>${ci + 1}. ${c.t}</b>`;
+        if (c.locked) b.classList.add('locked');
+        b.addEventListener('click', () => { if (!c.locked) { clearInterval(portTick); c.fn(); } });
+        box.appendChild(b);
+      });
+    }
+  }, 18);
+}
+function codecClear() {
+  codecEl.classList.add('hidden');
+  document.getElementById('codec-choices').innerHTML = '';
+  document.getElementById('s-actions').classList.remove('with-codec');
+  if (codecTimer) clearInterval(codecTimer);
+  codecTimer = null;
+}
+function blip(freq) {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  const ctx = blip.ctx || (blip.ctx = new AC());
+  if (ctx.state === 'suspended') { ctx.resume().catch(() => { }); return; }
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = 'square'; o.frequency.value = freq;
+  g.gain.value = 0.012;
+  o.connect(g); g.connect(ctx.destination);
+  o.start();
+  o.stop(ctx.currentTime + 0.03);
+}
+const SPEAKERS = {
+  merchant: { name: 'TRAVELING MERCHANT', color: '#fbbf24', glyph: '⌖' },
+  pirate: { name: 'SPIRAT RAIDER', color: '#f0abfc', glyph: '☠' },
+  patrol: { name: 'ORDER PATROL AI', color: '#a5b4fc', glyph: '▨' },
+  distress: { name: 'DISTRESS SIGNAL', color: '#fb923c', glyph: '⨂' },
+  station: { name: 'DOCKMASTER', color: '#fbbf24', glyph: '⌂' },
+  anomaly: { name: 'UNKNOWN SIGNAL', color: '#c084fc', glyph: '◮' },
+  ruins: { name: 'CELESTIAL PRESENCE', color: '#7dd3fc', glyph: '☥' },
+  rift: { name: 'THE RIFT', color: '#e879f9', glyph: '✦' },
+  mining: { name: 'AGING MINER', color: '#22d3ee', glyph: '⛏' },
+  logging: { name: 'SHIP COMPUTER', color: '#94a3b8', glyph: '⌬' },
+  self: { name: 'SHIP COMPUTER', color: '#94a3b8', glyph: '⌬' },
+};
+
+// ---------- procedural staging per node ----------
+function mkActor(kind, x, y, opts) {
+  const a = Object.assign({ kind, x, y, seed: Math.random() * TAU, face: kind === 'foe' ? Math.PI : 0 }, opts || {});
+  if (opts && opts.orb) { a.ax = x; a.ay = y; a.orbPh = Math.random() * TAU; a.orbSp = 0.25 + Math.random() * 0.2; }
+  return a;
+}
+const SECTOR_STAGE = {
+  Station: n => [mkActor('station', n.x + 40, n.y - 70, { color: '#fbbf24' })],
+  Nebula: n => [mkActor('anomaly', n.x - 100, n.y + 150, { color: '#818cf8' })],
+  AsteroidField: n => [mkActor('rocks', n.x, n.y - 130, {}), mkActor('rocks', n.x + 10, n.y + 170, {})],
+  CelestialSite: n => [mkActor('ruins', n.x + 20, n.y - 90, { color: '#7dd3fc' })],
+  DarkRift: n => [mkActor('rift', n.x + 30, n.y - 90, { color: '#e879f9' })],
+};
+const SCENES = {
+  combat: (n, who) => {
+    const col = who === 'pirates' ? '#f0abfc' : who === 'patrol' ? '#a5b4fc' : '#e879f9';
+    const kind = who === 'pirates' ? 'pirate' : who === 'patrol' ? 'patrol' : 'drone';
+    const m = who === 'pirates' ? [mkActor(kind, n.x + 150, n.y - 70, { color: col }), mkActor(kind, n.x + 190, n.y + 90, { color: shade(col, 1) })] : [mkActor(kind, n.x + 160, n.y - 20, { color: col })];
+    return m;
+  },
+  merchant: n => [mkActor('merchant', n.x + 160, n.y - 30, { color: '#fbbf24', orb: 10 })],
+  patrol: n => SECTOR_STAGE.Station(n).concat([mkActor('patrol', n.x + 150, n.y + 60, { color: '#a5b4fc' })]),
+  derelict: n => [mkActor('derelict', n.x + 140, n.y - 60, {})],
+  anomaly: n => [mkActor('anomaly', n.x + 150, n.y - 40, {})],
+  celestial: n => [mkActor('ruins', n.x + 40, n.y - 90, { color: '#7dd3fc' })],
+  darkrift: n => [mkActor('rift', n.x + 30, n.y - 90, { color: '#e879f9' })],
+  mining: n => [mkActor('rocks', n.x + 30, n.y - 140, {}), mkActor('rocks', n.x - 60, n.y + 160, {})],
+  distress: n => [mkActor('derelict', n.x + 140, n.y - 60, {})],
+  station: n => SECTOR_STAGE.Station(n),
+  pirates: n => SCENES.combat(n, 'pirates'),
+  trap: n => SCENES.combat(n, 'pirates'),
+};
+
+// ---------- scene flow: click node -> fly -> resolve ----------
+function enterScene(node) {
+  G.scene = {
+    nodeId: node.id, anchor: { x: node.x, y: node.y },
+    actors: [], parts: [], shots: [], floats: [],
+    player: mkActor('player', node.x + 190, node.y + 90, { color: '#22d3ee', face: Math.PI }),
+  };
+  G.scene.player.crewLine = 'Rook: Manning weapons · Vex: On bridge';
+  const extra = (SECTOR_STAGE[node.type] ? SECTOR_STAGE[node.type](node) : []);
+  G.scene.actors = G.scene.actors.concat(extra);
+}
+function exitScene() {
+  codecClear();
+  document.getElementById('s-actions').classList.add('hidden');
+  const node = G.nodes.get(G.current);
+  if (!node) { G.scene = null; return; }
+  G.scene = null;
+  const z = Math.min(1.1, Math.min(W, H) / 820);
+  flyTo(node.x, node.y, z, 850, () => { });
+}
+function travelTo(id) {
+  if (G.activeEvent || G.scene || G.screen !== 'play') return;
+  const cur = G.nodes.get(G.current);
+  if (!cur.links.includes(id) || G.fuel < 1) {
+    if (G.fuel < 1) gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
+    return;
+  }
+  G.fuel -= 1; G.jumps++;
+  const node = G.nodes.get(id);
+  const first = !node.visited;
+  node.visited = true;
+  G.current = id;
+  if (first) expandAround(id, cur.id);
+  // cinematic fly-in, then crew line + encounter
+  const zi = Math.min(1.6, Math.min(W, H) / 520);
+  flyTo(node.x, node.y, zi, 900, () => {
+    enterScene(node);
+    codecSay({ name: 'SHIP COMPUTER', color: '#94a3b8', glyph: '⌬', text: crewEntry() });
+    setTimeout(() => {
+      codecClear();
+      beginEncounter(node);
+    }, 1400);
+  });
+}
+function crewEntry() {
+  const n = G.nodes.get(G.current);
+  const typeTxt = n.type === 'Station' ? 'Station on scopes.'
+    : n.type === 'Combat' ? 'Weapons hot.'
+    : n.type === 'Distress' ? 'Beacon ahead.'
+    : n.type === 'DarkRift' ? 'Rift interference.'
+    : n.type === 'Anomaly' ? 'Sensor ghost.'
+    : n.type === 'CelestialSite' ? 'Ruins ahead.'
+    : n.type === 'AetheriumField' ? 'Mineral readings.'
+    : 'Open space.';
+  return `Jump ${G.jumps}. ${typeTxt}`;
+}
+
+function beginEncounter(node) {
+  let key = SECTOR_EVENT[node.type];
+  if (!key || G.rng() < 0.3) key = randomEvent(G.rng, dangerOf(node));
+  const source = G.encounters.has(node.id) ? 'empty' : key;
+  const ev = JSON.parse(JSON.stringify(EVENTS[source]));
+  ev.subtitle = `${node.name} · ${node.type.toUpperCase()}`;
+  G.activeEvent = ev;
+  G.outcome = null;
+  G.encounters.add(node.id);
+  // stage procedural actors + opening codec
+  const actors = (SCENES[source] || (() => []))(node);
+  if (actors.length) G.scene.actors = G.scene.actors.concat(actors);
+  const sp = SPEAKERS[source] || SPEAKERS.self;
+  codecSay({ ...sp, text: ev.desc, choices: codecChoicesFor(ev) });
+}
+function codecChoicesFor(ev) {
+  return ev.choices.map((c, i) => ({
+    t: c.t, locked: !canPay(c.req || {}), primary: i === 0,
+    fn: () => { if (canPay(c.req || {})) { codecClear(); choose(i); } },
+  }));
 }
 
 // ---------- theme (single source: theme.css; canvas follows DOM) ----------
@@ -503,7 +729,6 @@ const ctx = canvas.getContext('2d');
 const menuEl = document.getElementById('menu');
 const overEl = document.getElementById('over');
 const modalEl = document.getElementById('modal');
-const battleEl = document.getElementById('battle');
 const hudEl = document.getElementById('hud');
 let W = 0, H = 0;
 function resize() {
@@ -523,6 +748,7 @@ const G = {
   jumps: 0, kills: 0,
   cam: { x: 0, y: 0, z: 1 },
   activeEvent: null, outcome: null,
+  scene: null, camAnim: null, encounters: new Set(),
   best: +(localStorage.getItem('sd-best') || 0),
   rng: mulberry32(1),
   mouse: { x: 0.5, y: 0.5 }, // normalized hover, far-layer drift
@@ -608,7 +834,9 @@ function expandAround(id, avoidId) {
 
 function startRun(faction) {
   if (B) { clearInterval(B.timer); B = null; window.__sd.battle = null; }
-  battleEl.classList.add('hidden');
+  codecClear();
+  document.getElementById('s-actions').classList.add('hidden');
+  G.scene = null; G.camAnim = null;
   G.faction = faction;
   G.rng = mulberry32((Math.random() * 0xFFFFFFFF) >>> 0);
   G.nodes.clear(); G.nextId = 1;
@@ -620,8 +848,10 @@ function startRun(faction) {
   G.ship = faction.id === 'spirats' ? { w1: 'laser', w2: 'missile' }
     : faction.id === 'webes' ? { w1: 'ion', w2: 'laser' } : { w1: 'laser', w2: 'laser' };
   G.activeEvent = null; G.outcome = null;
+  G.scene = null; G.camAnim = null; G.encounters = new Set();
   const start = addNode('Station', 0, 0);
   G.nodes.get(start).visited = true;
+  G.encounters.add(start);
   G.current = start;
   const n0 = 3 + Math.floor(G.rng() * 3);
   for (let i = 0; i < n0; i++) {
@@ -643,33 +873,7 @@ function canPay(req) {
   if (req.scrap && G.scrap < req.scrap) return false;
   return true;
 }
-function travelTo(id) {
-  if (G.activeEvent || G.screen !== 'play') return;
-  const cur = G.nodes.get(G.current);
-  if (!cur.links.includes(id) || G.fuel < 1) {
-    if (G.fuel < 1) gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
-    return;
-  }
-  G.fuel -= 1; G.jumps++;
-  const node = G.nodes.get(id);
-  const first = !node.visited;
-  node.visited = true;
-  G.current = id;
-  if (first) expandAround(id, cur.id);
-  paintHUD();
-  if (G.fuel <= 0) return gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
-  openEventFor(node);
-}
-
-function openEventFor(node) {
-  let key = SECTOR_EVENT[node.type];
-  if (!key || G.rng() < 0.3) key = randomEvent(G.rng, dangerOf(node));
-  const ev = JSON.parse(JSON.stringify(EVENTS[key]));
-  ev.subtitle = `${node.name} · ${node.type.toUpperCase()}`;
-  G.activeEvent = ev;
-  G.outcome = null;
-  showModal();
-}
+function openEventFor(node) { beginEncounter(node); }
 
 function dangerOf(node) {
   const base = { Empty: 0, Nebula: 1, AsteroidField: 2, Station: 0, Distress: 3, Combat: 5, Anomaly: 4, DarkRift: 8, CelestialSite: 6, AetheriumField: 7 }[node.type] || 0;
@@ -705,6 +909,10 @@ function choose(i) {
     return startBattle(who, pickFoe(who, danger, G.rng), stance);
   }
   // faction shortcuts: fixed good outcome, no gamble
+  if (c.maybeTrap && G.rng() < 0.35) {
+    G.activeEvent = null;
+    return startBattle('trap', 'scout', 'hostile');
+  }
   let pick = null;
   if (c.webes && G.faction.id === 'webes') pick = 0;
   else if (c.tribute && G.faction.id === 'spirats') { applyDelta([0, -Math.ceil(8 / 2), 0]); return closeEvent(`${ev.title} — the Spirats respect their own. Half tribute accepted.`); }
@@ -722,10 +930,6 @@ function choose(i) {
   const [text, delta, extra] = c.out[pick];
   applyDelta(delta);
   paintHUD();
-  if (extra && extra.battle) {
-    G.activeEvent = null;
-    return startBattle(extra.battle, 'scout', 'hostile');
-  }
   closeEvent(`${ev.title} — ${text}`);
 }
 
@@ -739,13 +943,14 @@ function applyDelta([f, s, h]) {
 function closeEvent(outcomeText) {
   G.activeEvent = null;
   G.outcome = null;
-  hideModal();
-  if (G.hull <= 0) return gameOver('HULL BREACHED — CLAIMED BY THE RIFT');
-  if (G.fuel <= 0) {
-    // stranded unless current node links somewhere free... fuel is per jump, so dead
-    return gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
+  if (G.hull <= 0) {
+    const pa = G.scene ? G.scene.player : null;
+    if (pa) { pa.dead = true; burst(pa.x, pa.y, '#f87171', 40); }
+    return gameOver('HULL BREACHED — CLAIMED BY THE RIFT');
   }
+  if (G.fuel <= 0) return gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
   banner(outcomeText.split('—')[1]?.trim().toUpperCase().slice(0, 60) || 'EVENT RESOLVED');
+  setTimeout(exitScene, 800);
 }
 
 function gameOver(reason) {
@@ -759,24 +964,7 @@ function gameOver(reason) {
   overEl.classList.remove('hidden');
 }
 
-// ---------- modal + hud ----------
-function showModal() {
-  const ev = G.activeEvent;
-  document.getElementById('m-title').textContent = ev.title;
-  document.getElementById('m-sub').textContent = ev.subtitle;
-  document.getElementById('m-desc').textContent = ev.desc;
-  const box = document.getElementById('m-choices');
-  box.innerHTML = '';
-  ev.choices.forEach((c, i) => {
-    const b = document.createElement('button');
-    const cost = [...(c.req?.scrap ? [`${c.req.scrap}⛁`] : []), ...(c.req?.fuel ? [`${c.req.fuel}⛽`] : [])].join(' ');
-    b.innerHTML = `<b>${i + 1}. ${c.t}</b>${cost ? `<span>${cost}</span>` : ''}`;
-    if (!canPay(c.req || {})) b.classList.add('locked');
-    b.addEventListener('click', () => choose(i));
-    box.appendChild(b);
-  });
-  modalEl.classList.remove('hidden');
-}
+// ---------- hud ----------
 function hideModal() { modalEl.classList.add('hidden'); }
 function paintHUD() {
   hudEl.innerHTML =
@@ -910,7 +1098,7 @@ canvas.addEventListener('pointerdown', e => {
 });
 window.addEventListener('pointermove', e => {
   if (e.pointerType !== 'touch') { G.mouse.x = e.clientX / W; G.mouse.y = e.clientY / H; }
-  if (!drag.on) return;
+  if (!drag.on || G.scene || G.camAnim) return;
   const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
   if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
   G.cam.x = drag.cx - dx / G.cam.z;
@@ -919,7 +1107,7 @@ window.addEventListener('pointermove', e => {
 window.addEventListener('pointerup', e => {
   if (!drag.on) return;
   drag.on = false;
-  if (drag.moved || G.screen !== 'play' || G.activeEvent) return;
+  if (drag.moved || G.screen !== 'play' || G.activeEvent || G.scene || G.camAnim || B) return;
   const w = toWorld(e.clientX, e.clientY);
   let best = null, bd = (34 / G.cam.z) ** 2;
   for (const n of G.nodes.values()) {
@@ -951,12 +1139,241 @@ for (const k of new Set(Object.values(SECTOR_STYLE).map(s => s.icon))) {
   iconImgs[k] = img;
 }
 
+// ---------- scene: camera flight + procedural node staging ----------
+// Click a node -> camera flies in, scene builds at the node, codec talks. No pre-modal.
+function flyTo(x, y, z, dur, done) {
+  G.camAnim = { x0: G.cam.x, y0: G.cam.y, z0: G.cam.z, x1: x, y1: y, z1: z, t0: performance.now(), dur, done };
+}
+function stepCamAnim(now) {
+  const a = G.camAnim;
+  if (!a) return;
+  let k = Math.min(1, (now - a.t0) / a.dur);
+  k = k * k * k * (k * (k * 6 - 15) + 10); // smootherstep
+  G.cam.x = a.x0 + (a.x1 - a.x0) * k;
+  G.cam.y = a.y0 + (a.y1 - a.y0) * k;
+  G.cam.z = a.z0 + (a.z1 - a.z0) * k;
+  if (k >= 1) { G.camAnim = null; if (a.done) a.done(); }
+}
+let X_FX = x => x, Y_FX = y => y;
+function poly(points, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(points[0], points[1]);
+  for (let i = 2; i < points.length; i += 2) ctx.lineTo(points[i], points[i + 1]);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+// Vector ship shapes, drawn facing +x. a: actor, t: seconds.
+function drawShipShape(a, t) {
+  const c = a.color, dim = a.dead;
+  ctx.save();
+  ctx.translate(X_FX(a.x), Y_FX(a.y));
+  ctx.scale(G.cam.z, G.cam.z);
+  ctx.rotate(a.face || 0);
+  ctx.globalAlpha = dim ? 0.35 : 1;
+  const flick = 0.7 + 0.3 * Math.sin(t * 30 + a.seed);
+  if (a.kind === 'player') {
+    poly([20, 0, -12, -11, -5, 0, -12, 11], shade(c, dim), TH.ink);
+    poly([8, 0, -4, -4, -4, 4], hexA(c, 0.9));
+    ctx.fillStyle = `rgba(125,211,252,${0.5 * flick})`; // engine
+    poly([-12, -4, -19 - 4 * flick, 0, -12, 4], `rgba(125,211,252,${0.5 * flick})`);
+  } else if (a.kind === 'pirate') {
+    poly([18, 0, 5, -13, -6, -6, -15, -11, -11, 0, -15, 11, -6, 6, 5, 13], shade(c, dim), TH.ink);
+    poly([4, 0, -6, -3, -6, 3], hexA('#f87171', 0.9));
+    ctx.fillStyle = `rgba(248,113,113,${0.5 * flick})`;
+    poly([-14, -3, -20 - 3 * flick, 0, -14, 3], `rgba(248,113,113,${0.5 * flick})`);
+  } else if (a.kind === 'patrol') {
+    poly([20, 0, -13, -9, -6, 0, -13, 9], shade(c, dim), TH.ink);
+    ctx.fillStyle = hexA(c, 0.9);
+    ctx.fillRect(-2, -2, 8, 4);
+    ctx.fillStyle = `rgba(165,180,252,${0.5 * flick})`;
+    poly([-13, -3, -18 - 3 * flick, 0, -13, 3], `rgba(165,180,252,${0.5 * flick})`);
+  } else if (a.kind === 'merchant') {
+    ctx.fillStyle = shade(c, dim);
+    ctx.fillRect(-18, -9, 32, 18);
+    ctx.strokeStyle = TH.ink; ctx.lineWidth = 1.5; ctx.strokeRect(-18, -9, 32, 18);
+    ctx.fillStyle = hexA(c, 0.8);
+    ctx.beginPath(); ctx.arc(-22, -10, 6, 0, TAU); ctx.arc(-22, 10, 6, 0, TAU); ctx.fill();
+    ctx.fillStyle = `rgba(251,191,36,${0.4 * flick})`;
+    ctx.fillRect(-18, -2, -4 * flick - 2, 4);
+  } else if (a.kind === 'drone') {
+    poly([10, 0, -8, -8, -8, 8], shade(c, dim), TH.ink);
+    ctx.fillStyle = hexA('#e879f9', 0.9);
+    ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, TAU); ctx.fill();
+  } else if (a.kind === 'station') {
+    ctx.strokeStyle = hexA(c, dim ? 0.4 : 0.95); ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0, 0, 44, 0, TAU); ctx.stroke();
+    ctx.fillStyle = shade(c, dim);
+    ctx.fillRect(-12, -12, 24, 24);
+    ctx.strokeStyle = TH.ink; ctx.lineWidth = 1.5; ctx.strokeRect(-12, -12, 24, 24);
+    for (let i = 0; i < 4; i++) {
+      const an = t * 0.5 + a.seed + i * Math.PI / 2;
+      ctx.fillStyle = (Math.sin(t * 3 + i * 2) > 0) ? '#fbbf24' : hexA('#fbbf24', 0.2);
+      ctx.beginPath(); ctx.arc(Math.cos(an) * 44, Math.sin(an) * 44, 2.5, 0, TAU); ctx.fill();
+    }
+  } else if (a.kind === 'derelict') {
+    ctx.fillStyle = shade('#475569', true);
+    ctx.save(); ctx.rotate(0.4); ctx.fillRect(-22, -8, 18, 12); ctx.restore();
+    ctx.save(); ctx.rotate(-0.3); ctx.fillRect(4, -4, 20, 10); ctx.restore();
+    if (Math.sin(t * 2 + a.seed) > 0.7) {
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillRect(6 + Math.sin(a.seed * 9) * 8, -6, 2, 2);
+    }
+  } else if (a.kind === 'anomaly') {
+    const r = 26 + 6 * Math.sin(t * 2 + a.seed);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    g.addColorStop(0, 'rgba(192,132,252,0.9)');
+    g.addColorStop(0.5, 'rgba(129,140,248,0.35)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+  } else if (a.kind === 'ruins') {
+    for (let i = -1; i <= 1; i++) {
+      poly([i * 16 - 5, 14, i * 16, -18 - (i * i) * -6, i * 16 + 5, 14], hexA(c, 0.75), TH.ink);
+    }
+  } else if (a.kind === 'rift') {
+    ctx.strokeStyle = hexA('#e879f9', 0.85); ctx.lineWidth = 3;
+    ctx.save(); ctx.rotate(Math.sin(t * 0.8 + a.seed) * 0.15);
+    ctx.beginPath(); ctx.ellipse(0, 0, 12, 42, 0, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = hexA('#e879f9', 0.35);
+    ctx.beginPath(); ctx.ellipse(0, 0, 22, 52, 0, 0, TAU); ctx.stroke();
+    ctx.restore();
+  } else if (a.kind === 'rocks') {
+    for (let i = 0; i < 5; i++) {
+      const h1 = hash2(a.seed | 0, i, 5), h2 = hash2(a.seed | 0, i, 6);
+      const rx = (h1 - 0.5) * 130, ry = (h2 - 0.5) * 110, rr = 8 + h1 * 16;
+      poly([rx + rr, ry, rx, ry - rr * 0.7, rx - rr, ry + rr * 0.4], '#334155', '#0f172a');
+    }
+  }
+  ctx.restore();
+  // shield bubble + hit flash
+  if (!dim && a.shieldFlash > 0) {
+    ctx.globalAlpha = Math.min(1, a.shieldFlash) * 0.7;
+    ctx.strokeStyle = '#7dd3fc'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(X_FX(a.x), Y_FX(a.y), 34 * G.cam.z, 0, TAU); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  if (!dim && a.hitFlash > 0) {
+    ctx.globalAlpha = Math.min(1, a.hitFlash) * 0.6;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(X_FX(a.x), Y_FX(a.y), 26 * G.cam.z, 0, TAU); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+function shade(hex, dim) {
+  return dim ? '#1e293b' : hexA(hex, 0.28);
+}
+// floating hp bar + crew status over a battle-linked actor
+function drawActorBar(a) {
+  if (!a.hp || a.dead) return;
+  const s = a.hp, w = 64;
+  const pct = Math.max(0, s.hull / s.maxHull);
+  const ax = X_FX(a.x), ay = Y_FX(a.y);
+  ctx.fillStyle = 'rgba(2,6,16,0.8)';
+  ctx.fillRect(ax - w / 2, ay - 46 * G.cam.z, w, 7);
+  ctx.fillStyle = a.foe ? '#f87171' : '#22d3ee';
+  ctx.fillRect(ax - w / 2 + 1, ay - 45 * G.cam.z, w * pct - 2, 5);
+  ctx.fillStyle = '#7dd3fc';
+  for (let i = 0; i < s.sh; i++) ctx.fillRect(ax - w / 2 + i * 8, ay - 54 * G.cam.z, 6, 4);
+  if (a.crewLine) {
+    ctx.fillStyle = 'rgba(148,163,184,0.9)';
+    ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(a.crewLine, ax, ay + 42 * G.cam.z);
+  }
+}
+// crew dots moving inside your hull (visual echo of crewAI stations)
+const ROOM_PT = { weapons: [7, 0], engines: [-9, 0], shields: [0, -6], bridge: [0, 6] };
+function drawCrewDots(a, t) {
+  if (!a.hp || !a.hp.crew || a.dead) return;
+  const flip = a.face ? -1 : 1;
+  for (let i = 0; i < a.hp.crew.length; i++) {
+    const c = a.hp.crew[i];
+    const p = ROOM_PT[c.station] || ROOM_PT.bridge;
+    c.dx = (c.dx ?? p[0]) + (p[0] - (c.dx ?? p[0])) * 0.06;
+    c.dy = (c.dy ?? p[1]) + (p[1] - (c.dy ?? p[1])) * 0.06;
+    ctx.fillStyle = TH.acc;
+    ctx.beginPath(); ctx.arc(X_FX(a.x + c.dx * flip), Y_FX(a.y + c.dy), 2.6 * G.cam.z, 0, TAU); ctx.fill();
+  }
+}
+// fx: shots, bursts, floating text
+function spawnShot(a, b, color, size) {
+  const S = G.scene;
+  if (!S) return;
+  S.shots.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, t: 0, dur: 0.28, color, size: size || 3 });
+}
+function burst(x, y, color, n) {
+  const S = G.scene;
+  if (!S) return;
+  for (let i = 0; i < (n || 14); i++) {
+    const an = Math.random() * TAU, sp = 40 + Math.random() * 160;
+    S.parts.push({ x, y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp, life: 0.5 + Math.random() * 0.5, t: 0, color, size: 1 + Math.random() * 2.5 });
+  }
+}
+function floatText(x, y, text, color) {
+  const S = G.scene;
+  if (!S) return;
+  S.floats.push({ x, y, text, color: color || '#fff', t: 0, dur: 1.1 });
+}
+function stepFx(dt) {
+  const S = G.scene;
+  if (!S) return;
+  for (const a of S.actors) {
+    a.shieldFlash = Math.max(0, (a.shieldFlash || 0) - dt * 3);
+    a.hitFlash = Math.max(0, (a.hitFlash || 0) - dt * 4);
+    if (!a.dead && a.orb) {
+      a.x = a.ax + Math.cos(performance.now() / 1000 * a.orbSp + a.orbPh) * a.orb;
+      a.y = a.ay + Math.sin(performance.now() / 1000 * a.orbSp * 0.8 + a.orbPh) * a.orb * 0.6;
+    }
+  }
+  for (const s of S.shots) s.t += dt;
+  S.shots = S.shots.filter(s => s.t < s.dur);
+  for (const p of S.parts) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.96; p.vy *= 0.96; }
+  S.parts = S.parts.filter(p => p.t < p.life);
+  for (const f of S.floats) { f.t += dt; f.y -= 24 * dt; }
+  S.floats = S.floats.filter(f => f.t < f.dur);
+}
+function drawFx() {
+  const S = G.scene;
+  if (!S) return;
+  const t = performance.now() / 1000;
+  if (S.player && !S.player.dead) drawShipShape(S.player, t);
+  for (const a of S.actors) drawShipShape(a, t);
+  if (S.player) drawCrewDots(S.player, t);
+  for (const a of S.actors) drawActorBar(a);
+  for (const s of S.shots) {
+    const k = s.t / s.dur;
+    const x = X_FX(s.x1 + (s.x2 - s.x1) * k), y = Y_FX(s.y1 + (s.y2 - s.y1) * k);
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.size; ctx.lineCap = 'round';
+    ctx.beginPath();
+    const x0 = X_FX(s.x1 + (s.x2 - s.x1) * Math.max(0, k - 0.15)), y0 = Y_FX(s.y1 + (s.y2 - s.y1) * Math.max(0, k - 0.15));
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(x, y, s.size / 1.5, 0, TAU); ctx.fill();
+  }
+  for (const p of S.parts) {
+    ctx.globalAlpha = 1 - p.t / p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(X_FX(p.x), Y_FX(p.y), p.size * G.cam.z, p.size * G.cam.z);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'center'; ctx.font = 'bold 13px sans-serif';
+  for (const f of S.floats) {
+    ctx.globalAlpha = 1 - f.t / f.dur;
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, X_FX(f.x), Y_FX(f.y));
+  }
+  ctx.globalAlpha = 1;
+}
+
 // ---------- render ----------
 function draw() {
   ctx.clearRect(0, 0, W, H);
   const t = performance.now() / 1000;
   drawNebulas(t);
   drawStars(t);
+  if (G.scene) { X_FX = wx => (wx - G.cam.x) * G.cam.z + W / 2; Y_FX = wy => (wy - G.cam.y) * G.cam.z + H / 2; }
   if (G.screen === 'menu' || G.faction === null && G.screen !== 'play') return;
   const { x: cx, y: cy, z } = G.cam;
   const X = wx => (wx - cx) * z + W / 2;
@@ -1016,12 +1433,17 @@ function draw() {
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(X(cur.x), Y(cur.y), 24 + p * 22, 0, TAU); ctx.stroke();
   }
+  if (G.scene) drawFx();
+  X_FX = x => x; Y_FX = y => y;
 }
 
 let last = 0;
 function frame(ts) {
   requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (ts - last) / 1000);
   last = ts;
+  stepCamAnim(ts);
+  if (G.scene) stepFx(dt);
   draw();
 }
 
