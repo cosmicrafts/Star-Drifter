@@ -1,0 +1,90 @@
+name: Deploy Star Drifter to stardrifter.cosmicrafts.com
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Static JS game, no build step (procedural canvas, zero deps):
+# 1. CI rsyncs public/ to a NEW immutable dir: releases/<sha>-<run>.
+# 2. /var/www/stardrifter.cosmicrafts.com/current flips atomically.
+# 3. Only the 5 newest releases are kept.
+# Requiere los secrets SSH_PRIVATE_KEY, SSH_HOST y SSH_USER.
+jobs:
+  deploy:
+    name: Deploy Static Game
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add Server to Known Hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H -T 10 ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Stage Immutable Release
+        run: |
+          REL="releases/${{ github.sha }}-${{ github.run_number }}"
+          rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no" public/ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/stardrifter.cosmicrafts.com/$REL/"
+          echo "staged $REL"
+
+      - name: Activate Release (atomic symlink + retain 5)
+        run: |
+          REL="releases/${{ github.sha }}-${{ github.run_number }}"
+          ssh -o StrictHostKeyChecking=no "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" "WANT='$REL' bash -s" <<'REMOTE'
+          set -eu
+          link="/var/www/stardrifter.cosmicrafts.com/.current.$$"
+          ln -sfn "$WANT" "$link"
+          mv -hf "$link" /var/www/stardrifter.cosmicrafts.com/current
+          got="$(readlink /var/www/stardrifter.cosmicrafts.com/current)"
+          test "$got" = "$WANT" || { echo "FLIP FAILED: current=$got want=$WANT"; exit 1; }
+          echo "live now: $got"
+          cd /var/www/stardrifter.cosmicrafts.com/releases
+          old="$(ls -t | tail -n +6 || true)"
+          if [ -n "$old" ]; then echo "$old" | xargs -I{} rm -rf "{}"; fi
+          ls
+          REMOTE
+
+      - name: Sync nginx conf (versioned in infra/nginx)
+        run: |
+          scp -o StrictHostKeyChecking=no infra/nginx/stardrifter.cosmicrafts.com.conf \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/sd-nginx.conf"
+          ssh -o StrictHostKeyChecking=no "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" <<'REMOTE'
+          set -eu
+          live=/usr/local/etc/nginx/conf.d/stardrifter.cosmicrafts.com.conf
+          if ! cmp -s /tmp/sd-nginx.conf "$live"; then
+            sudo -n cp "$live" "$live.bak_$(date +%s)"
+            sudo -n cp /tmp/sd-nginx.conf "$live"
+            sudo -n nginx -t
+            sudo -n service nginx reload
+            sudo -n nginx -T 2>/dev/null | grep -q 'max-age=3600, must-revalidate' \
+              || { echo "NGINX POLICY CHECK FAILED"; exit 1; }
+            echo "nginx conf updated + reloaded"
+          else
+            echo "nginx conf unchanged"
+          fi
+          rm -f /tmp/sd-nginx.conf
+          REMOTE
+
+      - name: Verify Live Site
+        run: |
+          set -e
+          base="https://stardrifter.cosmicrafts.com"
+          check() { code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1")"; echo "$1 -> $code"; [ "$code" = "200" ]; }
+          check "$base/"
+          check "$base/game.js"
+          check "$base/style.css"
+          curl -s --max-time 30 "$base/" | grep -q "STAR DRIFTER"
+          echo "home contains game: yes"
+          echo "ALL LIVE CHECKS PASSED"

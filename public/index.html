@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Star Drifter — Cosmicrafts</title>
+  <meta name="description" content="Drift between sectors, chain your drift, survive the Dark Rift." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🚀</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="game"></canvas>
+
+    <!-- Faction select -->
+    <div id="menu" class="overlay">
+      <p class="kicker">[ CHOOSE YOUR FACTION ]</p>
+      <h1>STAR DRIFTER</h1>
+      <p class="sub">Drift the Dark Rift. Chain it. Survive it.</p>
+      <div id="factions"></div>
+      <p class="hint">WASD / arrows to thrust &amp; steer · touch-drag on mobile · reach the warp gate</p>
+    </div>
+
+    <!-- Game over -->
+    <div id="over" class="overlay hidden">
+      <p class="kicker">[ SIGNAL LOST ]</p>
+      <h1 id="over-title">DRIFT ENDED</h1>
+      <p class="sub" id="over-stats"></p>
+      <button id="again">DRIFT AGAIN</button>
+    </div>
+
+    <div id="banner" class="hidden"></div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>

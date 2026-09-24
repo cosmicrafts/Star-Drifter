@@ -1,26 +1,32 @@
 # Star Drifter
 
-A space drifting game built with Bevy.
+Procedural space-drifting arcade (vanilla JS + canvas, zero deps, no build step).
+Live at https://stardrifter.cosmicrafts.com — embedded in the Cosmicrafts game library.
 
-## Getting Started
+The legacy Rust/Bevy version is frozen on the `legacy-bevy` branch.
 
-### Prerequisites
-
-- Rust (latest stable version)
-- Cargo (comes with Rust)
-
-### Running the Game
+## Play locally
 
 ```bash
-cargo run
+cd public && python3 -m http.server 8000
+# open http://127.0.0.1:8000/
 ```
 
-### Building for Release
+## How it works
 
-```bash
-cargo build --release
-```
+- `public/index.html` — shell: faction menu, game-over overlay, canvas
+- `public/game.js` — the whole game: seeded sector generation, inertia/drift
+  physics, drift-chain scoring, closing Dark Rift storm, warp gates
+- `public/style.css` — menus and overlays
+- `public/assets/icons/` — sector iconography (kept from the Bevy version)
 
-## Development
+Game design (factions, the 10 sector types, Aetherium/Hull) follows the
+original Bevy design doc; the arcade drift gameplay delivers what the site
+promises: drift between sectors, chain your drift, survive the Dark Rift.
 
-This project uses Bevy 0.17.3 for game development.
+## Deploy
+
+Push to `main` → GitHub Actions rsyncs `public/` to an immutable release dir
+on Ionos, flips `/var/www/stardrifter.cosmicrafts.com/current` atomically,
+syncs `infra/nginx/stardrifter.cosmicrafts.com.conf` (backup + `nginx -t` +
+reload) and verifies live.
