@@ -165,7 +165,14 @@ function randomEvent(rng, danger) {
   return 'patrol';
 }
 
-// ---------- dom ----------
+// ---------- theme (single source: theme.css; canvas follows DOM) ----------
+const TH = {};
+function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['ink', 'muted', 'faint', 'line', 'accent', 'accent-soft', 'accent2', 'green', 'red', 'gold', 'surface', 'bg']) {
+    TH[k] = cs.getPropertyValue('--' + k).trim();
+  }
+}
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const menuEl = document.getElementById('menu');
@@ -180,6 +187,7 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', resize); resize();
+readTheme();
 
 // ---------- state ----------
 const G = {
@@ -416,11 +424,12 @@ function showModal() {
 function hideModal() { modalEl.classList.add('hidden'); }
 function paintHUD() {
   hudEl.innerHTML =
-    `<span class="hf" style="color:${G.faction.color}">⬢ ${G.faction.name}</span>` +
-    `<span>⛽ <b>${Math.floor(G.fuel)}</b></span>` +
-    `<span>⛁ <b>${G.scrap}</b></span>` +
-    `<span>🛡 <b>${Math.ceil(G.hull)}</b></span>` +
-    `<span class="hd">J${G.jumps} · BEST ${G.best}</span>`;
+    `<span class="hud-chip" style="color:${G.faction.color}">⬢ ${G.faction.name}</span>` +
+    `<span class="hud-chip">⛽ <b>${Math.floor(G.fuel)}</b></span>` +
+    `<span class="hud-chip">⛁ <b>${G.scrap}</b></span>` +
+    `<span class="hud-chip">🛡 <b>${Math.ceil(G.hull)}</b></span>` +
+    `<span class="spacer"></span>` +
+    `<span class="hud-chip">J${G.jumps} · BEST ${G.best}</span>`;
 }
 function banner(html) {
   const b = document.getElementById('banner');
@@ -470,7 +479,11 @@ window.addEventListener('keydown', e => {
   if (e.code === 'Escape' && G.activeEvent) { /* events must resolve, no dismiss */ }
 });
 
-// ---------- icons ----------
+// hex color + alpha -> rgba (theme tokens stay the single source)
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
 const iconImgs = {};
 for (const k of new Set(Object.values(SECTOR_STYLE).map(s => s.icon))) {
   const img = new Image();
@@ -481,7 +494,7 @@ for (const k of new Set(Object.values(SECTOR_STYLE).map(s => s.icon))) {
 // ---------- render ----------
 function draw() {
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = '#fff';
+  ctx.fillStyle = TH.ink;
   for (const st of G.stars) {
     ctx.globalAlpha = 0.2 + st.s * 0.3;
     ctx.fillRect(st.x * W, st.y * H, st.s, st.s);
@@ -498,7 +511,7 @@ function draw() {
       const m = G.nodes.get(l);
       const isCur = n.id === G.current || m.id === G.current;
       const bothVis = n.visited && m.visited;
-      ctx.strokeStyle = isCur ? 'rgba(52,211,153,0.85)' : bothVis ? 'rgba(100,116,139,0.4)' : 'rgba(148,163,184,0.35)';
+      ctx.strokeStyle = isCur ? hexA(TH.green, 0.85) : bothVis ? hexA(TH.faint, 0.4) : hexA(TH.muted, 0.35);
       ctx.lineWidth = isCur ? 2.5 : 1.2;
       ctx.beginPath(); ctx.moveTo(X(n.x), Y(n.y)); ctx.lineTo(X(m.x), Y(m.y)); ctx.stroke();
     }
@@ -513,13 +526,13 @@ function draw() {
     const reachable = cur && cur.links.includes(n.id);
     // halo for reachable
     if (reachable && n.id !== G.current) {
-      ctx.strokeStyle = 'rgba(52,211,153,0.5)';
+      ctx.strokeStyle = hexA(TH.green, 0.5);
       ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(x, y, r + 7 + 2 * Math.sin(performance.now() / 400), 0, TAU); ctx.stroke();
     }
-    ctx.fillStyle = '#0b0b18';
+    ctx.fillStyle = TH.surface;
     ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
-    ctx.strokeStyle = n.id === G.current ? '#34d399' : n.visited ? '#475569' : st.color;
+    ctx.strokeStyle = n.id === G.current ? TH.green : n.visited ? TH.faint : st.color;
     ctx.lineWidth = n.id === G.current ? 3 : 2;
     ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke();
     const img = iconImgs[st.icon];
@@ -530,8 +543,8 @@ function draw() {
       ctx.beginPath(); ctx.arc(x, y, r * 0.35, 0, TAU); ctx.fill();
     }
     if (z > 0.55) {
-      ctx.fillStyle = n.id === G.current ? '#34d399' : '#94a3b8';
-      ctx.font = `${Math.max(10, 11 * z)}px monospace`;
+      ctx.fillStyle = n.id === G.current ? TH.green : TH.muted;
+      ctx.font = `${Math.max(10, 11 * z)}px 'Work Sans', system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillText(n.name, x, y + r + 14);
     }
@@ -539,7 +552,7 @@ function draw() {
   // current pulse
   if (cur) {
     const p = (performance.now() / 900) % 1;
-    ctx.strokeStyle = `rgba(52,211,153,${0.6 * (1 - p)})`;
+    ctx.strokeStyle = hexA(TH.green, 0.6 * (1 - p));
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(X(cur.x), Y(cur.y), 24 + p * 22, 0, TAU); ctx.stroke();
   }
