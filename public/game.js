@@ -1,14 +1,13 @@
 'use strict';
-/* Star Drifter MVP — procedural canvas arcade. No build step, no deps.
- * Faithful to the legacy Bevy design: 6 factions, 10 sector types,
- * Aetherium, Hull, drift chains, the closing Dark Rift storm.
+/* Star Drifter — FTL-like roguelike (vanilla JS + canvas, zero deps).
+ * Port of the Bevy design: node map, click-to-travel (1 fuel/jump),
+ * events with choices + requirements, fuel/scrap/hull, 6 factions,
+ * 10 sector types, procedural expansion. No LLM: static event deck
+ * with danger-weighted outcomes.
  */
 
-// ---------- utils ----------
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
-const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
-// ponytail: mulberry32, deterministic sectors from seed. Upgrade path: crypto seed per run.
 function mulberry32(seed) {
   let a = seed >>> 0;
   return () => {
@@ -19,476 +18,502 @@ function mulberry32(seed) {
   };
 }
 
-// ---------- data (ported from the Bevy design doc) ----------
+// ---------- data ----------
 const FACTIONS = [
-  { id: 'celestials', name: 'CELESTIALS', bonus: 'Stations repair +50%, storm hurts less', color: '#7dd3fc' },
-  { id: 'cosmicons', name: 'COSMICONS', bonus: '+40 max Hull, order holds', color: '#a5b4fc' },
-  { id: 'spirats', name: 'SPIRATS', bonus: 'Drift chains build 2x faster', color: '#f0abfc' },
-  { id: 'webes', name: 'WEBES', bonus: '+60% pickup range, cold logic', color: '#67e8f9' },
-  { id: 'archs', name: 'ARCHS', bonus: 'Devour small asteroids for fuel', color: '#fda4af' },
-  { id: 'spades', name: 'SPADES', bonus: '+50% score inside the storm', color: '#c4b5fd' },
+  { id: 'celestials', name: 'CELESTIALS', bonus: 'Start +20 hull. Stations repair more.', color: '#7dd3fc' },
+  { id: 'cosmicons', name: 'COSMICONS', bonus: 'Start +15 fuel. Order provides.', color: '#a5b4fc' },
+  { id: 'spirats', name: 'SPIRATS', bonus: 'Pirates take half tribute. Start +10 scrap.', color: '#f0abfc' },
+  { id: 'webes', name: 'WEBES', bonus: 'Anomalies always pay out. Start +10 fuel.', color: '#67e8f9' },
+  { id: 'archs', name: 'ARCHS', bonus: 'Devour: +scrap from empty sectors.', color: '#fda4af' },
+  { id: 'spades', name: 'SPADES', bonus: 'Dark Rift pays double scrap.', color: '#c4b5fd' },
 ];
-// danger mirrors SectorType::base_danger from sector.rs
-const SECTORS = [
-  { type: 'Empty', danger: 0, rocks: 6, crystals: 6, anomalies: 0, nebula: 0, station: false },
-  { type: 'Nebula', danger: 1, rocks: 8, crystals: 6, anomalies: 1, nebula: 4, station: false },
-  { type: 'Asteroid Field', danger: 2, rocks: 16, crystals: 7, anomalies: 1, nebula: 0, station: false },
-  { type: 'Station', danger: 0, rocks: 5, crystals: 5, anomalies: 0, nebula: 1, station: true },
-  { type: 'Distress', danger: 3, rocks: 12, crystals: 8, anomalies: 1, nebula: 1, station: false },
-  { type: 'Anomaly', danger: 4, rocks: 10, crystals: 7, anomalies: 3, nebula: 2, station: false },
-  { type: 'Combat', danger: 5, rocks: 14, crystals: 8, anomalies: 1, nebula: 0, station: false, mines: 4 },
-  { type: 'Celestial Site', danger: 6, rocks: 12, crystals: 9, anomalies: 2, nebula: 2, station: false },
-  { type: 'Aetherium Field', danger: 7, rocks: 14, crystals: 12, anomalies: 2, nebula: 1, station: false },
-  { type: 'Dark Rift', danger: 8, rocks: 18, crystals: 10, anomalies: 2, nebula: 3, station: false, mines: 6 },
-];
-const NAME_A = ['Vel', 'Kor', 'Thal', 'Zer', 'Mir', 'Xan', 'Ostr', 'Bel', 'Dra', 'Nyx', 'Sol', 'Rho'];
-const NAME_B = ['aris', ' Prime', ' Drift', ' Hollow', ' Verge', ' Maw', ' Shallows', ' Deep', ' Gate', ' Expanse'];
+// colors mirror map.rs node palette
+const SECTOR_STYLE = {
+  Empty: { color: '#94a3b8', icon: 'empty' },
+  Nebula: { color: '#818cf8', icon: 'nebula' },
+  AsteroidField: { color: '#cbd5e1', icon: 'asteroid' },
+  Station: { color: '#fbbf24', icon: 'station' },
+  Distress: { color: '#fb923c', icon: 'empty' },
+  Combat: { color: '#f87171', icon: 'combat' },
+  Anomaly: { color: '#c084fc', icon: 'anomaly' },
+  DarkRift: { color: '#e879f9', icon: 'darkrift' },
+  CelestialSite: { color: '#7dd3fc', icon: 'celestial' },
+  AetheriumField: { color: '#22d3ee', icon: 'aetherium' },
+};
+const PREFIX = {
+  Empty: ['Void', 'Silent', 'Barren', 'Hollow'], Nebula: ['Crimson', 'Azure', 'Stellar', 'Mystic'],
+  AsteroidField: ['Shattered', 'Broken', 'Drifting', 'Ancient'], Station: ['Haven', 'Refuge', 'Outpost', 'Trading'],
+  Distress: ['Lost', 'Abandoned', 'Forgotten', 'Derelict'], Combat: ['Contested', 'Hostile', 'War-torn', 'Dangerous'],
+  Anomaly: ['Strange', 'Twisted', 'Anomalous', 'Warped'], DarkRift: ['Dark', 'Void', 'Abyssal', 'Shadow'],
+  CelestialSite: ['Sacred', 'Ancient', 'Divine', 'Eternal'], AetheriumField: ['Gleaming', 'Radiant', 'Precious', 'Crystalline'],
+};
+const SUFFIX = {
+  Empty: ['Expanse', 'Reach', 'Void', 'Zone'], Nebula: ['Nebula', 'Cloud', 'Mist', 'Veil'],
+  AsteroidField: ['Field', 'Belt', 'Cluster', 'Debris'], Station: ['Station', 'Port', 'Hub', 'Dock'],
+  Distress: ['Wreck', 'Hulk', 'Grave', 'Ruin'], Combat: ['Battleground', 'Warzone', 'Sector', 'Front'],
+  Anomaly: ['Anomaly', 'Phenomenon', 'Distortion', 'Rift'], DarkRift: ['Rift', 'Chasm', 'Abyss', 'Maw'],
+  CelestialSite: ['Shrine', 'Temple', 'Sanctum', 'Monument'], AetheriumField: ['Mines', 'Crystals', 'Deposits', 'Veins'],
+};
+// Event deck: choice -> outcomes (good/bad, danger-weighted). Deltas: [fuel, scrap, hull].
+const EVENTS = {
+  merchant: {
+    title: 'Traveling Merchant', desc: 'A merchant ship hails you, offering to trade supplies.',
+    choices: [
+      { t: 'Trade 10 scrap for fuel', req: { scrap: 10 }, out: [['Fuel cells secured. +6 fuel.', [6, -10, 0]]] },
+      { t: 'Trade 4 fuel for scrap', req: { fuel: 4 }, out: [['Scrap converted. +14 scrap.', [-4, 14, 0]]] },
+      { t: 'Decline and continue', req: {}, out: [['You drift on.', [0, 0, 0]]] },
+    ],
+  },
+  anomaly: {
+    title: 'Cosmic Anomaly', desc: 'Your sensors detect a strange energy signature ahead.',
+    choices: [
+      { t: 'Investigate the anomaly', req: {}, webes: true, out: [['Reality folds. You harvest charged particles. +4 fuel, +6 scrap.', [4, 6, 0]], ['Feedback surge! Systems fried. -15 hull.', [0, 0, -15]]] },
+      { t: 'Scan from a safe distance', req: {}, out: [['Clean readings. Charts updated. +4 scrap.', [0, 4, 0]], ['Static. Nothing but noise.', [0, 0, 0]]] },
+      { t: 'Ignore and continue', req: {}, out: [['You drift on.', [0, 0, 0]]] },
+    ],
+  },
+  derelict: {
+    title: 'Derelict Ship', desc: 'You discover the wreckage of an ancient vessel drifting in space.',
+    choices: [
+      { t: 'Board and explore', req: {}, out: [['Survivor cache! +12 scrap, +3 fuel.', [3, 12, 0]], ['Hull collapse! You barely escape. -12 hull.', [0, 0, -12]]] },
+      { t: 'Salvage from outside', req: {}, out: [['Sheared plating recovered. +7 scrap.', [0, 7, 0]]] },
+      { t: 'Leave it alone', req: {}, out: [['You drift on.', [0, 0, 0]]] },
+    ],
+  },
+  pirates: {
+    title: 'Spirat Raiders', desc: 'Spirat pirates emerge from an asteroid field, demanding tribute!',
+    choices: [
+      { t: 'Fight the pirates', req: {}, out: [['Pirates routed! Their hold is yours. +14 scrap.', [0, 14, -6]], ['They fight dirty. You escape bleeding. -22 hull.', [0, 0, -22]]] },
+      { t: 'Pay tribute', req: { scrap: 8 }, tribute: true, out: [['They take the scrap and vanish.', [0, -8, 0]]] },
+      { t: 'Burn 3 fuel to outrun them', req: { fuel: 3 }, out: [['Clean getaway. -3 fuel.', [-3, 0, 0]], ['They clip your engines. -3 fuel, -8 hull.', [-3, 0, -8]]] },
+    ],
+  },
+  patrol: {
+    title: 'Faction Patrol', desc: 'A patrol ship approaches your vessel.',
+    choices: [
+      { t: 'Hail them peacefully', req: {}, out: [['Protocols exchanged. They share charts. +3 fuel.', [3, 0, 0]], ['They scan you for contraband and fine you. -6 scrap.', [0, -6, 0]]] },
+      { t: 'Prepare for combat', req: {}, out: [['Show of force works. They back off, dropping supplies. +8 scrap.', [0, 8, 0]], ['Skirmish! You win but scarred. -12 hull, +5 scrap.', [0, 5, -12]]] },
+      { t: 'Burn 2 fuel to avoid them', req: { fuel: 2 }, out: [['Silent running. -2 fuel.', [-2, 0, 0]]] },
+    ],
+  },
+  station: {
+    title: 'Station Services', desc: 'The dockmaster offers repairs and trade.',
+    choices: [
+      { t: 'Repair hull (12 scrap)', req: { scrap: 12 }, repair: true, out: [['Hull welded and sealed.', [0, -12, 0]]] },
+      { t: 'Buy fuel (8 scrap)', req: { scrap: 8 }, out: [['Tanks topped. +8 fuel.', [8, -8, 0]]] },
+      { t: 'Sell charts (free)', req: {}, out: [['Your maps fetch a price. +8 scrap.', [0, 8, 0]]] },
+    ],
+  },
+  distress: {
+    title: 'Distress Beacon', desc: 'A damaged ship requests assistance.',
+    choices: [
+      { t: 'Answer the call', req: {}, out: [['Grateful crew pays in fuel. +6 fuel, +4 scrap.', [6, 4, 0]], ['A trap! Spirats spring the ambush. -16 hull.', [0, 0, -16]]] },
+      { t: 'Cautious approach (2 fuel)', req: { fuel: 2 }, out: [['Real survivors. They reward caution. +5 scrap.', [-2, 5, 0]], ['Trap spotted in time. You burn away. -2 fuel.', [-2, 0, 0]]] },
+      { t: 'Ignore and continue', req: {}, out: [['You drift on.', [0, 0, 0]]] },
+    ],
+  },
+  mining: {
+    title: 'Aetherium Field', desc: 'Rare Aetherium crystals float in the void. Mining is profitable but dangerous.',
+    choices: [
+      { t: 'Mine carefully', req: {}, out: [['Rich vein! +12 scrap.', [0, 12, 0]], ['Crystal shard storm. -10 hull, +6 scrap.', [0, 6, -10]]] },
+      { t: 'Strip-mine (risky)', req: {}, out: [['Jackpot! +20 scrap.', [0, 20, -6]], ['Cave-in! -20 hull, +8 scrap.', [0, 8, -20]]] },
+      { t: 'Leave it alone', req: {}, out: [['You drift on.', [0, 0, 0]]] },
+    ],
+  },
+  celestial: {
+    title: 'Celestial Ruins', desc: 'Ancient ruins pulse with residual power.',
+    choices: [
+      { t: 'Commune with the ruins', req: {}, out: [['The ancients approve. Hull knits itself. +20 hull.', [0, 0, 20]], ['Visions overwhelm the crew. Systems short. -8 hull, +6 scrap.', [0, 6, -8]]] },
+      { t: 'Harvest residual energy', req: {}, out: [['Cells charged. +7 fuel.', [7, 0, 0]]] },
+      { t: 'Leave it alone', req: {}, out: [['You drift on.', [0, 0, 0]]] },
+    ],
+  },
+  combat: {
+    title: 'Hostile Contact', desc: 'Hostile ships block your path!',
+    choices: [
+      { t: 'Fight through', req: {}, out: [['Enemy destroyed. Salvage secured. +12 scrap.', [0, 12, -8]], ['Outgunned! You limp away. -24 hull.', [0, 0, -24]]] },
+      { t: 'Burn 4 fuel to evade', req: { fuel: 4 }, out: [['Lost them in the dust. -4 fuel.', [-4, 0, 0]], ['Parting shot hits home. -4 fuel, -10 hull.', [-4, 0, -10]]] },
+    ],
+  },
+  darkrift: {
+    title: 'Dark Rift Fragment', desc: 'A fragment of the Rift itself. Dangerous but potentially rewarding.',
+    choices: [
+      { t: 'Harvest the fragment', req: {}, spades: true, out: [['Impossible matter secured. +16 scrap.', [0, 16, -6]], ['The Rift pushes back. -22 hull.', [0, 0, -22]]] },
+      { t: 'Skirt the edge', req: {}, out: [['Picked clean what drifted out. +7 scrap.', [0, 7, 0]]] },
+      { t: 'Leave it alone', req: {}, out: [['You drift on.', [0, 0, 0]]] },
+    ],
+  },
+  empty: {
+    title: 'Silent Void', desc: 'Empty space. Nothing but dust and old light.',
+    choices: [
+      { t: 'Scoop dust (Archs feast)', req: {}, archs: true, out: [['Matter is matter. +6 scrap.', [0, 6, 0]]] },
+      { t: 'Drift and rest', req: {}, out: [['Quiet repairs. +6 hull.', [0, 0, 6]], ['Nothing happens. The void watches.', [0, 0, 0]]] },
+    ],
+  },
+};
+const SECTOR_EVENT = {
+  Station: 'station', Distress: 'distress', Combat: 'combat', Anomaly: 'anomaly',
+  DarkRift: 'darkrift', CelestialSite: 'celestial', AetheriumField: 'mining',
+  Empty: 'empty', Nebula: null, AsteroidField: null,
+};
+function randomEvent(rng, danger) {
+  const r = rng() * 100;
+  if (r < 28) return 'merchant';
+  if (r < 46) return 'anomaly';
+  if (r < 64) return 'derelict';
+  if (r < 80) return danger >= 4 ? 'pirates' : 'patrol';
+  return 'patrol';
+}
 
-// ---------- state ----------
+// ---------- dom ----------
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-let W = 0, H = 0, DPR = 1;
+const menuEl = document.getElementById('menu');
+const overEl = document.getElementById('over');
+const modalEl = document.getElementById('modal');
+const hudEl = document.getElementById('hud');
+let W = 0, H = 0;
 function resize() {
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
   W = window.innerWidth; H = window.innerHeight;
-  canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  canvas.width = Math.floor(W * dpr); canvas.height = Math.floor(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', resize); resize();
 
+// ---------- state ----------
 const G = {
-  screen: 'menu', // menu | play | over
-  faction: null,
-  ship: null, rocks: [], crystals: [], mines: [], anomalies: [],
-  clouds: [], station: null, gate: null,
-  sectorIdx: 0, sector: null, seed: 1,
-  score: 0, chain: 0, chainT: 0,
-  stormR: 0, stormMax: 0,
-  quota: 0, bannerT: 0,
+  screen: 'menu', faction: null,
+  nodes: new Map(), current: 0, nextId: 1,
+  fuel: 50, scrap: 15, hull: 100, maxHull: 100,
+  jumps: 0, kills: 0,
+  cam: { x: 0, y: 0, z: 1 },
+  activeEvent: null, outcome: null,
   best: +(localStorage.getItem('sd-best') || 0),
+  rng: mulberry32(1),
   stars: [],
 };
-for (let i = 0; i < 160; i++) G.stars.push({ x: Math.random(), y: Math.random(), s: Math.random() * 1.6 + 0.4 });
+for (let i = 0; i < 200; i++) G.stars.push({ x: Math.random(), y: Math.random(), s: Math.random() * 1.5 + 0.4 });
 
-// ---------- input ----------
-const keys = {};
-window.addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
-});
-window.addEventListener('keyup', e => { keys[e.code] = false; });
-const touch = { active: false, x: 0, y: 0 };
-canvas.addEventListener('pointerdown', e => { touch.active = true; touch.x = e.clientX; touch.y = e.clientY; });
-window.addEventListener('pointermove', e => { if (touch.active) { touch.x = e.clientX; touch.y = e.clientY; } });
-window.addEventListener('pointerup', () => { touch.active = false; });
-
-// ---------- generation ----------
-function genSector(idx) {
-  const rng = mulberry32((G.seed ^ (idx * 2654435761)) >>> 0);
-  const base = SECTORS[Math.floor(rng() * SECTORS.length)];
-  const depth = Math.floor(idx / 2);
-  const R = Math.max(W, H);
-  const cx = W / 2, cy = H / 2;
-  const put = (away = 120) => {
-    for (let t = 0; t < 40; t++) {
-      const x = rng() * W, y = rng() * H;
-      if (dist2(x, y, cx, cy) > away * away) return { x, y };
-    }
-    return { x: rng() * W, y: rng() * H };
-  };
-  const n = (v, per) => Math.round(v + depth * per);
-  G.sector = base;
-  G.rocks = []; G.crystals = []; G.mines = []; G.anomalies = []; G.clouds = [];
-  for (let i = 0; i < n(base.rocks, 1.2); i++) {
-    const p = put();
-    G.rocks.push({ x: p.x, y: p.y, vx: (rng() - 0.5) * 40, vy: (rng() - 0.5) * 40, r: 12 + rng() * 26, rot: rng() * TAU, vr: (rng() - 0.5) * 1.2, small: false });
+function sectorType(rng, distance) {
+  const df = Math.min(5, distance / 10);
+  const r = rng() * 100;
+  if (r <= 25) return 'Empty';
+  if (r <= 40) return 'Nebula';
+  if (r <= 55) return 'AsteroidField';
+  if (r <= 65) return 'Station';
+  if (r <= 75) return 'Distress';
+  if (r <= 85) return 'Combat';
+  if (r <= 90) return df > 2 && rng() < 0.3 ? 'DarkRift' : 'Anomaly';
+  if (r <= 98) return df > 1 && rng() < 0.4 ? 'CelestialSite' : 'Station';
+  return df > 3 && rng() < 0.2 ? 'AetheriumField' : 'AsteroidField';
+}
+function sectorName(rng, type) {
+  const p = PREFIX[type], s = SUFFIX[type];
+  return p[Math.floor(rng() * p.length)] + ' ' + s[Math.floor(rng() * s.length)];
+}
+function addNode(type, x, y) {
+  const id = G.nextId++;
+  G.nodes.set(id, { id, type, name: sectorName(G.rng, type), x, y, visited: false, links: [] });
+  return id;
+}
+function link(a, b) {
+  const A = G.nodes.get(a), B = G.nodes.get(b);
+  if (!A.links.includes(b)) A.links.push(b);
+  if (!B.links.includes(a)) B.links.push(a);
+}
+function expandAround(id, avoidId) {
+  const src = G.nodes.get(id);
+  const n = 2 + Math.floor(G.rng() * 3);
+  const baseA = Math.atan2(src.y - (G.nodes.get(avoidId)?.y ?? src.y - 1), src.x - (G.nodes.get(avoidId)?.x ?? src.x - 1));
+  for (let i = 0; i < n; i++) {
+    const a = baseA + (G.rng() - 0.5) * 2.4 + (i - (n - 1) / 2) * 0.5;
+    const d = 230 + G.rng() * 130;
+    const nid = addNode(sectorType(G.rng, G.jumps), src.x + Math.cos(a) * d, src.y + Math.sin(a) * d);
+    link(id, nid);
   }
-  for (let i = 0; i < n(base.crystals, 0.4); i++) {
-    const p = put(90);
-    G.crystals.push({ x: p.x, y: p.y, r: 9, ph: rng() * TAU });
-  }
-  for (let i = 0; i < (base.mines || 0) + Math.floor(depth / 3); i++) {
-    const p = put(160);
-    G.mines.push({ x: p.x, y: p.y, r: 11, ph: rng() * TAU });
-  }
-  for (let i = 0; i < base.anomalies; i++) {
-    const p = put(140);
-    G.anomalies.push({ x: p.x, y: p.y, r: 16, ph: rng() * TAU });
-  }
-  for (let i = 0; i < base.nebula; i++) G.clouds.push({ x: rng() * W, y: rng() * H, r: 90 + rng() * 130 });
-  G.station = base.station ? { ...put(200), r: 26, used: false } : null;
-  G.gate = null;
-  G.quota = Math.min(9, 5 + Math.floor(idx / 2));
-  G.stormMax = R * 0.75;
-  G.stormR = G.stormMax;
-  G.sectorName = NAME_A[Math.floor(rng() * NAME_A.length)] + NAME_B[Math.floor(rng() * NAME_B.length)];
-  G.collected = 0;
-  banner(`${G.sectorName} <small>${base.type.toUpperCase()} · DANGER ${Math.min(9, base.danger + depth)} · COLLECT ${G.quota} AETHERIUM</small>`);
 }
 
 function startRun(faction) {
   G.faction = faction;
-  G.seed = (Math.random() * 0xFFFFFFFF) >>> 0;
-  G.sectorIdx = 0; G.score = 0; G.chain = 0; G.chainT = 0;
-  const hull = faction.id === 'cosmicons' ? 140 : 100;
-  G.ship = { x: W / 2, y: H / 2, vx: 0, vy: 0, a: -Math.PI / 2, hull, maxHull: hull, fuel: 100, invuln: 0, thrusting: false, turning: 0 };
-  genSector(0);
+  G.rng = mulberry32((Math.random() * 0xFFFFFFFF) >>> 0);
+  G.nodes.clear(); G.nextId = 1;
+  G.fuel = 50 + (faction.id === 'cosmicons' ? 15 : faction.id === 'webes' ? 10 : 0);
+  G.scrap = 15 + (faction.id === 'spirats' ? 10 : 0);
+  G.maxHull = 100;
+  G.hull = 100 + (faction.id === 'celestials' ? 20 : 0);
+  G.jumps = 0; G.kills = 0;
+  G.activeEvent = null; G.outcome = null;
+  const start = addNode('Station', 0, 0);
+  G.nodes.get(start).visited = true;
+  G.current = start;
+  const n0 = 3 + Math.floor(G.rng() * 3);
+  for (let i = 0; i < n0; i++) {
+    const a = (i / n0) * TAU + G.rng() * 0.5;
+    link(start, addNode(sectorType(G.rng, 0), Math.cos(a) * 260, Math.sin(a) * 260));
+  }
+  G.cam = { x: 0, y: 0, z: Math.min(1, Math.min(W, H) / 700) };
   G.screen = 'play';
-  document.getElementById('menu').classList.add('hidden');
-  document.getElementById('over').classList.add('hidden');
+  menuEl.classList.add('hidden');
+  overEl.classList.add('hidden');
+  hudEl.classList.remove('hidden');
+  hideModal();
+  paintHUD();
+  banner('DRIFT BEGUN <small>CLICK A CONNECTED NODE · 1 FUEL PER JUMP</small>');
+}
+
+function canPay(req) {
+  if (req.fuel && G.fuel < req.fuel) return false;
+  if (req.scrap && G.scrap < req.scrap) return false;
+  return true;
+}
+function travelTo(id) {
+  if (G.activeEvent || G.screen !== 'play') return;
+  const cur = G.nodes.get(G.current);
+  if (!cur.links.includes(id) || G.fuel < 1) {
+    if (G.fuel < 1) gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
+    return;
+  }
+  G.fuel -= 1; G.jumps++;
+  const node = G.nodes.get(id);
+  const first = !node.visited;
+  node.visited = true;
+  G.current = id;
+  if (first) expandAround(id, cur.id);
+  paintHUD();
+  if (G.fuel <= 0) return gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
+  openEventFor(node);
+}
+
+function openEventFor(node) {
+  let key = SECTOR_EVENT[node.type];
+  if (!key || G.rng() < 0.3) key = randomEvent(G.rng, dangerOf(node));
+  const ev = JSON.parse(JSON.stringify(EVENTS[key]));
+  ev.subtitle = `${node.name} · ${node.type.toUpperCase()}`;
+  G.activeEvent = ev;
+  G.outcome = null;
+  showModal();
+}
+
+function dangerOf(node) {
+  const base = { Empty: 0, Nebula: 1, AsteroidField: 2, Station: 0, Distress: 3, Combat: 5, Anomaly: 4, DarkRift: 8, CelestialSite: 6, AetheriumField: 7 }[node.type] || 0;
+  return Math.min(9, base + Math.floor(G.jumps / 6));
+}
+
+function choose(i) {
+  const ev = G.activeEvent;
+  if (!ev || G.outcome) return;
+  const c = ev.choices[i];
+  if (!c || !canPay(c.req || {})) return;
+  // faction shortcuts: fixed good outcome, no gamble
+  let pick = null;
+  if (c.webes && G.faction.id === 'webes') pick = 0;
+  else if (c.tribute && G.faction.id === 'spirats') { applyDelta([0, -Math.ceil(8 / 2), 0]); return closeEvent(`${ev.title} — the Spirats respect their own. Half tribute accepted.`); }
+  else if (c.repair) {
+    const amt = G.faction.id === 'celestials' ? 45 : 30;
+    G.scrap -= 12; G.hull = Math.min(G.maxHull, G.hull + amt);
+    paintHUD(); return closeEvent(`${ev.title} — hull welded and sealed. +${amt} hull.`);
+  } else if (c.archs && G.faction.id === 'archs') pick = 0;
+  else if (c.spades && G.faction.id === 'spades') { applyDelta([0, 32, -6]); return closeEvent(`${ev.title} — the Rift feeds its own. +32 scrap.`); }
+  if (pick === null) {
+    const danger = dangerOf(G.nodes.get(G.current));
+    const badOdds = clamp(0.25 + danger * 0.06 - (G.faction.id === 'celestials' ? 0.1 : 0), 0.1, 0.75);
+    pick = (c.out.length > 1 && G.rng() < badOdds) ? 1 : 0;
+  }
+  const [text, delta] = c.out[pick];
+  applyDelta(delta);
+  paintHUD();
+  closeEvent(`${ev.title} — ${text}`);
+}
+
+function applyDelta([f, s, h]) {
+  G.fuel = Math.max(0, G.fuel + f);
+  G.scrap = Math.max(0, G.scrap + Math.round(s));
+  G.hull = clamp(G.hull + h, 0, G.maxHull);
+  if (h < 0 && s > 0) G.kills += 0; // combat salvage counts as progress, not kills
+}
+
+function closeEvent(outcomeText) {
+  G.activeEvent = null;
+  G.outcome = null;
+  hideModal();
+  if (G.hull <= 0) return gameOver('HULL BREACHED — CLAIMED BY THE RIFT');
+  if (G.fuel <= 0) {
+    // stranded unless current node links somewhere free... fuel is per jump, so dead
+    return gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
+  }
+  banner(outcomeText.split('—')[1]?.trim().toUpperCase().slice(0, 60) || 'EVENT RESOLVED');
 }
 
 function gameOver(reason) {
   G.screen = 'over';
-  if (G.score > G.best) { G.best = G.score; localStorage.setItem('sd-best', String(G.best)); }
-  document.getElementById('over-title').textContent = reason === 'fuel' ? 'ADRIFT IN THE RIFT' : 'HULL BREACHED';
+  hideModal();
+  const score = G.jumps * 10 + G.scrap + G.kills * 5;
+  if (score > G.best) { G.best = score; localStorage.setItem('sd-best', String(score)); }
+  document.getElementById('over-title').textContent = reason;
   document.getElementById('over-stats').textContent =
-    `Score ${G.score} · Best ${G.best} · Sector ${G.sectorIdx + 1} (${G.sectorName}) · ${G.faction.name}`;
-  const ov = document.getElementById('over');
-  ov.classList.remove('hidden');
+    `Jumps ${G.jumps} · Scrap ${G.scrap} · Best ${G.best} · ${G.faction.name}`;
+  overEl.classList.remove('hidden');
 }
 
-// ---------- update ----------
-function mult() { return 1 + Math.min(4, G.chain * 0.25); }
-function addScore(p, x, y) {
-  let v = Math.round(p * mult());
-  if (G.faction.id === 'spades' && outsideStorm(x, y)) v = Math.round(v * 1.5);
-  G.score += v;
-  if (v >= 20) floaters.push({ x, y, t: 0, txt: '+' + v });
+// ---------- modal + hud ----------
+function showModal() {
+  const ev = G.activeEvent;
+  document.getElementById('m-title').textContent = ev.title;
+  document.getElementById('m-sub').textContent = ev.subtitle;
+  document.getElementById('m-desc').textContent = ev.desc;
+  const box = document.getElementById('m-choices');
+  box.innerHTML = '';
+  ev.choices.forEach((c, i) => {
+    const b = document.createElement('button');
+    const cost = [...(c.req?.scrap ? [`${c.req.scrap}⛁`] : []), ...(c.req?.fuel ? [`${c.req.fuel}⛽`] : [])].join(' ');
+    b.innerHTML = `<b>${i + 1}. ${c.t}</b>${cost ? `<span>${cost}</span>` : ''}`;
+    if (!canPay(c.req || {})) b.classList.add('locked');
+    b.addEventListener('click', () => choose(i));
+    box.appendChild(b);
+  });
+  modalEl.classList.remove('hidden');
 }
-const floaters = [];
-
-function outsideStorm(x, y) {
-  return dist2(x, y, W / 2, H / 2) > G.stormR * G.stormR;
+function hideModal() { modalEl.classList.add('hidden'); }
+function paintHUD() {
+  hudEl.innerHTML =
+    `<span class="hf" style="color:${G.faction.color}">⬢ ${G.faction.name}</span>` +
+    `<span>⛽ <b>${Math.floor(G.fuel)}</b></span>` +
+    `<span>⛁ <b>${G.scrap}</b></span>` +
+    `<span>🛡 <b>${Math.ceil(G.hull)}</b></span>` +
+    `<span class="hd">J${G.jumps} · BEST ${G.best}</span>`;
 }
-
-function update(dt) {
-  const s = G.ship;
-  if (!s) return;
-  // steering
-  let rot = 0;
-  if (keys.ArrowLeft || keys.KeyA) rot -= 1;
-  if (keys.ArrowRight || keys.KeyD) rot += 1;
-  let thrust = !!(keys.ArrowUp || keys.KeyW || keys.Space);
-  if (touch.active) {
-    const dx = touch.x - s.x, dy = touch.y - s.y;
-    if (Math.hypot(dx, dy) > 24) {
-      const want = Math.atan2(dy, dx);
-      let d = want - s.a;
-      while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU;
-      rot = clamp(d * 2.2, -1, 1);
-      thrust = Math.abs(d) < 1.2;
-    }
-  }
-  s.a += rot * 3.4 * dt;
-  s.turning = rot;
-  // nebula drag
-  let drag = 0.55, inNebula = false;
-  for (const c of G.clouds) {
-    if (dist2(s.x, s.y, c.x, c.y) < c.r * c.r) { drag = 1.6; inNebula = true; break; }
-  }
-  if (thrust && s.fuel > 0) {
-    s.vx += Math.cos(s.a) * 300 * dt;
-    s.vy += Math.sin(s.a) * 300 * dt;
-    s.fuel = Math.max(0, s.fuel - 3.2 * dt);
-    s.thrusting = true;
-  } else s.thrusting = false;
-  const damp = Math.exp(-drag * dt);
-  s.vx *= damp; s.vy *= damp;
-  const sp = Math.hypot(s.vx, s.vy), maxSp = 430;
-  if (sp > maxSp) { s.vx *= maxSp / sp; s.vy *= maxSp / sp; }
-  s.x = (s.x + s.vx * dt + W) % W;
-  s.y = (s.y + s.vy * dt + H) % H;
-  if (s.invuln > 0) s.invuln -= dt;
-  // drift chain: sliding sideways while turning
-  const fx = Math.cos(s.a), fy = Math.sin(s.a);
-  const lat = Math.abs(s.vx * -fy + s.vy * fx);
-  const chainRate = G.faction.id === 'spirats' ? 2 : 1;
-  if (lat > 110 && Math.abs(rot) > 0.2 && sp > 150) {
-    G.chain += chainRate * dt * 2;
-    G.chainT = G.faction.id === 'spirats' ? 1.8 : 1.2;
-  } else if (G.chainT > 0) {
-    G.chainT -= dt;
-    if (G.chainT <= 0) G.chain = 0;
-  } else G.chain = Math.max(0, G.chain - dt * 3);
-  // rocks drift + collide
-  const pickupR = G.faction.id === 'webes' ? 64 : 40;
-  for (let i = G.rocks.length - 1; i >= 0; i--) {
-    const r = G.rocks[i];
-    r.x = (r.x + r.vx * dt + W) % W; r.y = (r.y + r.vy * dt + H) % H; r.rot += r.vr * dt;
-    const rr = r.r + 10;
-    if (dist2(s.x, s.y, r.x, r.y) < rr * rr) {
-      if (G.faction.id === 'archs' && r.r < 22) {
-        // Archs devour small rocks
-        G.rocks.splice(i, 1);
-        s.fuel = Math.min(100, s.fuel + 8);
-        addScore(15, r.x, r.y);
-        continue;
-      }
-      if (s.invuln <= 0) {
-        s.hull -= 12; s.invuln = 1.1; G.chain = 0; G.chainT = 0;
-        const d = Math.max(1, Math.hypot(s.x - r.x, s.y - r.y));
-        s.vx += (s.x - r.x) / d * 260; s.vy += (s.y - r.y) / d * 260;
-        shake(7);
-        if (s.hull <= 0) return gameOver('hull');
-      }
-    }
-  }
-  // crystals
-  for (let i = G.crystals.length - 1; i >= 0; i--) {
-    const c = G.crystals[i];
-    c.ph += dt * 3;
-    if (dist2(s.x, s.y, c.x, c.y) < pickupR * pickupR) {
-      G.crystals.splice(i, 1);
-      G.collected++;
-      s.fuel = Math.min(100, s.fuel + 4);
-      addScore(25, c.x, c.y);
-      if (G.collected >= G.quota && !G.gate) {
-        const a = Math.random() * TAU;
-        G.gate = { x: W / 2 + Math.cos(a) * G.stormR * 0.55, y: H / 2 + Math.sin(a) * G.stormR * 0.55, r: 30, ph: 0 };
-        banner('WARP GATE OPEN <small>FLY INTO THE RING</small>');
-      }
-    }
-  }
-  // mines (Combat/DarkRift sectors)
-  for (let i = G.mines.length - 1; i >= 0; i--) {
-    const m = G.mines[i];
-    m.ph += dt * 4;
-    if (dist2(s.x, s.y, m.x, m.y) < 26 * 26 && s.invuln <= 0) {
-      G.mines.splice(i, 1);
-      s.hull -= 20; s.invuln = 1.1; G.chain = 0; G.chainT = 0;
-      shake(10);
-      if (s.hull <= 0) return gameOver('hull');
-    }
-  }
-  // anomalies teleport
-  for (const a of G.anomalies) {
-    a.ph += dt * 2;
-    if (dist2(s.x, s.y, a.x, a.y) < 26 * 26 && s.invuln <= 0) {
-      s.x = Math.random() * W; s.y = Math.random() * H;
-      s.vx *= 0.3; s.vy *= 0.3; s.invuln = 1.5;
-      addScore(100, s.x, s.y);
-      banner('ANOMALY JUMP <small>+BONUS</small>');
-    }
-  }
-  // station repair
-  if (G.station && !G.station.used && dist2(s.x, s.y, G.station.x, G.station.y) < 40 * 40) {
-    G.station.used = true;
-    const heal = G.faction.id === 'celestials' ? 45 : 30;
-    s.hull = Math.min(s.maxHull, s.hull + heal);
-    addScore(50, G.station.x, G.station.y);
-    banner('HULL RESTORED <small>+' + heal + '</small>');
-  }
-  // warp gate
-  if (G.gate) {
-    G.gate.ph += dt * 3;
-    if (dist2(s.x, s.y, G.gate.x, G.gate.y) < 34 * 34) {
-      G.sectorIdx++;
-      addScore(150, s.x, s.y);
-      s.fuel = Math.min(100, s.fuel + 25);
-      genSector(G.sectorIdx);
-      s.x = W / 2; s.y = H / 2; s.vx = 0; s.vy = 0;
-      return;
-    }
-  }
-  // storm closes in
-  const stormSpeed = 9 + G.sector.danger * 1.6 + G.sectorIdx * 0.7;
-  G.stormR = Math.max(120, G.stormR - stormSpeed * dt);
-  if (outsideStorm(s.x, s.y)) {
-    const dps = G.faction.id === 'celestials' ? 7 : 10;
-    s.hull -= dps * dt;
-    if (Math.random() < dt * 6) floaters.push({ x: s.x, y: s.y - 20, t: 0, txt: 'RIFT!' });
-    if (s.hull <= 0) return gameOver('hull');
-  }
-  if (s.fuel <= 0 && sp < 20) return gameOver('fuel');
-  for (let i = floaters.length - 1; i >= 0; i--) {
-    floaters[i].t += dt;
-    if (floaters[i].t > 1) floaters.splice(i, 1);
-  }
-}
-
-let shakeT = 0, shakeM = 0;
-function shake(m) { shakeM = m; shakeT = 0.35; }
-
-// ---------- render ----------
 function banner(html) {
   const b = document.getElementById('banner');
   b.innerHTML = html;
   b.classList.remove('hidden');
-  void b.offsetWidth;
   b.style.animation = 'none'; void b.offsetWidth; b.style.animation = '';
   clearTimeout(banner._t);
   banner._t = setTimeout(() => b.classList.add('hidden'), 2600);
 }
 
-function draw(dt) {
+// ---------- input: pan/zoom/click + keys ----------
+const drag = { on: false, sx: 0, sy: 0, cx: 0, cy: 0, moved: false };
+function toWorld(px, py) {
+  return { x: (px - W / 2) / G.cam.z + G.cam.x, y: (py - H / 2) / G.cam.z + G.cam.y };
+}
+canvas.addEventListener('pointerdown', e => {
+  drag.on = true; drag.moved = false;
+  drag.sx = e.clientX; drag.sy = e.clientY; drag.cx = G.cam.x; drag.cy = G.cam.y;
+});
+window.addEventListener('pointermove', e => {
+  if (!drag.on) return;
+  const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+  if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
+  G.cam.x = drag.cx - dx / G.cam.z;
+  G.cam.y = drag.cy - dy / G.cam.z;
+});
+window.addEventListener('pointerup', e => {
+  if (!drag.on) return;
+  drag.on = false;
+  if (drag.moved || G.screen !== 'play' || G.activeEvent) return;
+  const w = toWorld(e.clientX, e.clientY);
+  let best = null, bd = (34 / G.cam.z) ** 2;
+  for (const n of G.nodes.values()) {
+    const d = (n.x - w.x) ** 2 + (n.y - w.y) ** 2;
+    if (d < bd) { bd = d; best = n; }
+  }
+  if (best) travelTo(best.id);
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  G.cam.z = clamp(G.cam.z * (e.deltaY < 0 ? 1.12 : 0.89), 0.3, 2.5);
+}, { passive: false });
+window.addEventListener('keydown', e => {
+  if (G.activeEvent && ['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(e.code)) {
+    choose(+e.code.slice(5) - 1);
+  }
+  if (e.code === 'Escape' && G.activeEvent) { /* events must resolve, no dismiss */ }
+});
+
+// ---------- icons ----------
+const iconImgs = {};
+for (const k of new Set(Object.values(SECTOR_STYLE).map(s => s.icon))) {
+  const img = new Image();
+  img.src = 'assets/icons/' + k + '.svg';
+  iconImgs[k] = img;
+}
+
+// ---------- render ----------
+function draw() {
   ctx.clearRect(0, 0, W, H);
-  let sx = 0, sy = 0;
-  if (shakeT > 0) { shakeT -= dt; sx = (Math.random() - 0.5) * shakeM; sy = (Math.random() - 0.5) * shakeM; }
-  ctx.save(); ctx.translate(sx, sy);
-  // stars
   ctx.fillStyle = '#fff';
   for (const st of G.stars) {
-    ctx.globalAlpha = 0.25 + st.s * 0.3;
+    ctx.globalAlpha = 0.2 + st.s * 0.3;
     ctx.fillRect(st.x * W, st.y * H, st.s, st.s);
   }
   ctx.globalAlpha = 1;
-  if (G.screen !== 'play' || !G.ship) { ctx.restore(); return; }
-  const t = performance.now() / 1000;
-  // nebula clouds
-  for (const c of G.clouds) {
-    const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, c.r);
-    g.addColorStop(0, 'rgba(99,102,241,0.20)');
-    g.addColorStop(1, 'rgba(99,102,241,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, TAU); ctx.fill();
+  if (G.screen === 'menu' || G.faction === null && G.screen !== 'play') return;
+  const { x: cx, y: cy, z } = G.cam;
+  const X = wx => (wx - cx) * z + W / 2;
+  const Y = wy => (wy - cy) * z + H / 2;
+  // links
+  for (const n of G.nodes.values()) {
+    for (const l of n.links) {
+      if (l < n.id) continue;
+      const m = G.nodes.get(l);
+      const isCur = n.id === G.current || m.id === G.current;
+      const bothVis = n.visited && m.visited;
+      ctx.strokeStyle = isCur ? 'rgba(52,211,153,0.85)' : bothVis ? 'rgba(100,116,139,0.4)' : 'rgba(148,163,184,0.35)';
+      ctx.lineWidth = isCur ? 2.5 : 1.2;
+      ctx.beginPath(); ctx.moveTo(X(n.x), Y(n.y)); ctx.lineTo(X(m.x), Y(m.y)); ctx.stroke();
+    }
   }
-  const s = G.ship;
-  // storm: dark outside, violet rim
-  ctx.save();
-  ctx.beginPath(); ctx.rect(0, 0, W, H);
-  ctx.arc(W / 2, H / 2, G.stormR, 0, TAU, true);
-  ctx.fillStyle = 'rgba(76,29,149,0.28)';
-  ctx.fill('evenodd');
-  ctx.strokeStyle = `rgba(192,132,252,${0.5 + 0.3 * Math.sin(t * 4)})`;
-  ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.arc(W / 2, H / 2, G.stormR, 0, TAU); ctx.stroke();
-  ctx.restore();
-  // station
-  if (G.station) {
-    ctx.strokeStyle = G.station.used ? '#475569' : '#34d399';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(G.station.x - 18, G.station.y - 18, 36, 36);
-    ctx.fillStyle = G.station.used ? '#475569' : '#34d399';
-    ctx.font = '11px monospace'; ctx.textAlign = 'center';
-    ctx.fillText(G.station.used ? 'SPENT' : '+HULL', G.station.x, G.station.y + 34);
+  // nodes
+  const cur = G.nodes.get(G.current);
+  for (const n of G.nodes.values()) {
+    const st = SECTOR_STYLE[n.type];
+    const x = X(n.x), y = Y(n.y);
+    if (x < -60 || x > W + 60 || y < -60 || y > H + 60) continue;
+    const r = (n.id === G.current ? 22 : 16) * Math.max(0.7, Math.min(1.3, z));
+    const reachable = cur && cur.links.includes(n.id);
+    // halo for reachable
+    if (reachable && n.id !== G.current) {
+      ctx.strokeStyle = 'rgba(52,211,153,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, r + 7 + 2 * Math.sin(performance.now() / 400), 0, TAU); ctx.stroke();
+    }
+    ctx.fillStyle = '#0b0b18';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+    ctx.strokeStyle = n.id === G.current ? '#34d399' : n.visited ? '#475569' : st.color;
+    ctx.lineWidth = n.id === G.current ? 3 : 2;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke();
+    const img = iconImgs[st.icon];
+    if (img && img.complete && img.naturalWidth) {
+      ctx.drawImage(img, x - r * 0.55, y - r * 0.55, r * 1.1, r * 1.1);
+    } else {
+      ctx.fillStyle = st.color;
+      ctx.beginPath(); ctx.arc(x, y, r * 0.35, 0, TAU); ctx.fill();
+    }
+    if (z > 0.55) {
+      ctx.fillStyle = n.id === G.current ? '#34d399' : '#94a3b8';
+      ctx.font = `${Math.max(10, 11 * z)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(n.name, x, y + r + 14);
+    }
   }
-  // warp gate
-  if (G.gate) {
-    ctx.strokeStyle = `rgba(34,211,238,${0.6 + 0.4 * Math.sin(G.gate.ph)})`;
-    ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(G.gate.x, G.gate.y, G.gate.r, 0, TAU); ctx.stroke();
-    ctx.beginPath(); ctx.arc(G.gate.x, G.gate.y, G.gate.r * 0.6, 0, TAU); ctx.stroke();
-  }
-  // anomalies
-  for (const a of G.anomalies) {
-    ctx.strokeStyle = `rgba(240,171,252,${0.5 + 0.4 * Math.sin(a.ph)})`;
+  // current pulse
+  if (cur) {
+    const p = (performance.now() / 900) % 1;
+    ctx.strokeStyle = `rgba(52,211,153,${0.6 * (1 - p)})`;
     ctx.lineWidth = 2;
-    for (let k = 0; k < 3; k++) {
-      ctx.beginPath(); ctx.arc(a.x, a.y, 6 + k * 6 + Math.sin(a.ph + k) * 2, 0, TAU); ctx.stroke();
-    }
-  }
-  // crystals
-  for (const c of G.crystals) {
-    const p = 1 + 0.2 * Math.sin(c.ph);
-    ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.ph * 0.4); ctx.scale(p, p);
-    ctx.fillStyle = '#22d3ee';
-    ctx.beginPath();
-    ctx.moveTo(0, -9); ctx.lineTo(6, 0); ctx.lineTo(0, 9); ctx.lineTo(-6, 0);
-    ctx.closePath(); ctx.fill();
-    ctx.restore();
-  }
-  // mines
-  for (const m of G.mines) {
-    ctx.fillStyle = `rgba(248,113,113,${0.7 + 0.3 * Math.sin(m.ph)})`;
-    ctx.beginPath(); ctx.arc(m.x, m.y, 7, 0, TAU); ctx.fill();
-    ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5;
-    for (let k = 0; k < 8; k++) {
-      const a = k / 8 * TAU + m.ph * 0.2;
-      ctx.beginPath();
-      ctx.moveTo(m.x + Math.cos(a) * 7, m.y + Math.sin(a) * 7);
-      ctx.lineTo(m.x + Math.cos(a) * 12, m.y + Math.sin(a) * 12);
-      ctx.stroke();
-    }
-  }
-  // rocks
-  ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 2;
-  for (const r of G.rocks) {
-    ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
-    ctx.beginPath();
-    const n = 8;
-    for (let k = 0; k <= n; k++) {
-      const a = k / n * TAU;
-      const rr = r.r * (0.78 + 0.22 * Math.sin(k * 2.7 + r.r));
-      const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
-      if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    }
-    ctx.stroke(); ctx.restore();
-  }
-  // ship (blink while invulnerable)
-  if (s.invuln <= 0 || Math.floor(t * 12) % 2 === 0) {
-    ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(s.a);
-    ctx.fillStyle = G.faction.color;
-    ctx.beginPath();
-    ctx.moveTo(14, 0); ctx.lineTo(-10, -9); ctx.lineTo(-5, 0); ctx.lineTo(-10, 9);
-    ctx.closePath(); ctx.fill();
-    if (s.thrusting) {
-      ctx.fillStyle = '#fb923c';
-      ctx.beginPath();
-      ctx.moveTo(-6, -4); ctx.lineTo(-6 - 10 - Math.random() * 8, 0); ctx.lineTo(-6, 4);
-      ctx.closePath(); ctx.fill();
-    }
-    ctx.restore();
-  }
-  // floaters
-  ctx.textAlign = 'center'; ctx.font = 'bold 13px monospace';
-  for (const f of floaters) {
-    ctx.globalAlpha = 1 - f.t;
-    ctx.fillStyle = '#fde68a';
-    ctx.fillText(f.txt, f.x, f.y - f.t * 30);
-  }
-  ctx.globalAlpha = 1;
-  ctx.restore();
-  drawHUD();
-}
-
-function bar(x, y, w, frac, color) {
-  ctx.fillStyle = 'rgba(255,255,255,0.12)';
-  ctx.fillRect(x, y, w, 8);
-  ctx.fillStyle = color;
-  ctx.fillRect(x, y, w * clamp(frac, 0, 1), 8);
-}
-
-function drawHUD() {
-  const s = G.ship;
-  ctx.textAlign = 'left'; ctx.font = '12px monospace';
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(`HULL`, 12, 20);
-  bar(58, 12, 120, s.hull / s.maxHull, s.hull > 30 ? '#34d399' : '#f87171');
-  ctx.fillText(`FUEL`, 12, 38);
-  bar(58, 30, 120, s.fuel / 100, '#60a5fa');
-  ctx.fillStyle = '#22d3ee';
-  ctx.fillText(`⬢ ${G.collected}/${G.quota}`, 12, 58);
-  ctx.fillStyle = '#fde68a';
-  ctx.fillText(`SCORE ${G.score}`, 12, 78);
-  if (G.chain > 0.5) {
-    ctx.fillStyle = '#f0abfc';
-    ctx.fillText(`DRIFT x${mult().toFixed(1)}`, 12, 98);
-  }
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#94a3b8';
-  ctx.fillText(`${G.sectorName} · #${G.sectorIdx + 1}`, W - 12, 20);
-  ctx.fillStyle = '#64748b';
-  ctx.fillText(`BEST ${G.best}`, W - 12, 38);
-  if (outsideStorm(s.x, s.y)) {
-    ctx.textAlign = 'center';
-    ctx.fillStyle = `rgba(248,113,113,${0.6 + 0.4 * Math.sin(performance.now() / 150)})`;
-    ctx.font = 'bold 15px monospace';
-    ctx.fillText('⚠ DARK RIFT — GET INSIDE ⚠', W / 2, 52);
+    ctx.beginPath(); ctx.arc(X(cur.x), Y(cur.y), 24 + p * 22, 0, TAU); ctx.stroke();
   }
 }
 
-// ---------- loop ----------
 let last = 0;
 function frame(ts) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (ts - last) / 1000 || 0.016);
   last = ts;
-  if (G.screen === 'play') update(dt);
-  draw(dt);
+  draw();
 }
 
-// ---------- menu wiring ----------
+// ---------- menu ----------
 const fdiv = document.getElementById('factions');
 for (const f of FACTIONS) {
   const b = document.createElement('button');
@@ -497,5 +522,5 @@ for (const f of FACTIONS) {
   fdiv.appendChild(b);
 }
 document.getElementById('again').addEventListener('click', () => startRun(G.faction));
-window.__sd = { G, startRun }; // test hook
+window.__sd = { G, travelTo, choose, startRun }; // test hook
 requestAnimationFrame(frame);

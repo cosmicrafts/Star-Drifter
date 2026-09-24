@@ -4,21 +4,32 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Star Drifter — Cosmicrafts</title>
-  <meta name="description" content="Drift between sectors, chain your drift, survive the Dark Rift." />
+  <meta name="description" content="A faster-than-light style roguelike: pick a faction, jump the node map, resolve events, manage fuel, scrap and hull." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🚀</text></svg>" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="wrap">
     <canvas id="game"></canvas>
+    <div id="hud" class="hidden"></div>
 
     <!-- Faction select -->
     <div id="menu" class="overlay">
       <p class="kicker">[ CHOOSE YOUR FACTION ]</p>
       <h1>STAR DRIFTER</h1>
-      <p class="sub">Drift the Dark Rift. Chain it. Survive it.</p>
+      <p class="sub">Jump the node map. Resolve events. Mind the fuel.</p>
       <div id="factions"></div>
-      <p class="hint">WASD / arrows to thrust &amp; steer · touch-drag on mobile · reach the warp gate</p>
+      <p class="hint">Click a connected node to jump (1 fuel) · pan by dragging · wheel to zoom · keys 1-4 pick event choices</p>
+    </div>
+
+    <!-- Event modal -->
+    <div id="modal" class="overlay hidden">
+      <div id="m-card">
+        <p class="kicker" id="m-sub"></p>
+        <h2 id="m-title"></h2>
+        <p class="sub" id="m-desc"></p>
+        <div id="m-choices"></div>
+      </div>
     </div>
 
     <!-- Game over -->

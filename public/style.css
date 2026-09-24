@@ -47,6 +47,34 @@ html, body {
   font-family: inherit; font-weight: 700; letter-spacing: 0.2em;
   padding: 0.8rem 2rem; cursor: pointer; font-size: 13px;
 }
+#hud {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; gap: 1rem; align-items: center;
+  padding: 0.55rem 0.9rem; z-index: 4;
+  background: linear-gradient(rgba(2,2,8,0.85), transparent);
+  color: #cbd5e1; font-size: 12px; pointer-events: none;
+}
+#hud b { color: #fff; }
+#hud .hd { margin-left: auto; color: #64748b; }
+#m-card {
+  max-width: 30rem; width: calc(100% - 2rem);
+  background: rgba(8,8,20,0.96);
+  border: 1px solid rgba(34,211,238,0.35); border-radius: 0.8rem;
+  padding: 1.2rem 1.2rem 1rem;
+}
+#m-card h2 { margin: 0.2rem 0 0.5rem; color: #fff; letter-spacing: 0.06em; }
+#m-choices { display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.8rem; }
+#m-choices button {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 0.55rem; color: #e2e8f0;
+  padding: 0.6rem 0.7rem; cursor: pointer; text-align: left;
+  font-family: inherit; font-size: 12px;
+  display: flex; justify-content: space-between; gap: 0.6rem; align-items: baseline;
+}
+#m-choices button:hover:not(.locked) { border-color: #22d3ee; background: rgba(34,211,238,0.08); }
+#m-choices button.locked { opacity: 0.38; cursor: not-allowed; }
+#m-choices button span { color: #94a3b8; font-size: 11px; white-space: nowrap; }
 #banner {
   position: absolute; top: 12%; left: 0; right: 0;
   text-align: center; z-index: 4; pointer-events: none;
