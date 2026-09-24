@@ -82,3 +82,37 @@ html, body {
   75% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* battle */
+#battle { z-index: 5; overflow-y: auto; padding: 1rem 0; }
+#b-card { width: min(560px, 94vw); max-height: 92vh; overflow-y: auto; }
+#b-foe .ship.foe { border-color: #f87171; }
+.ship {
+  background: var(--surface-1); border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 0.5rem 0.6rem; margin: 0.5rem 0;
+}
+.shead { display: flex; justify-content: space-between; font-size: 12px; letter-spacing: 0.08em; }
+.shp { color: var(--accent-soft); }
+.hbar { position: relative; height: 14px; background: var(--surface-3); border-radius: 4px; margin: 0.3rem 0; overflow: hidden; }
+.hbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--green), var(--accent)); }
+.hbar span { position: absolute; inset: 0; text-align: center; font-size: 10px; line-height: 14px; color: var(--ink); }
+.sysrow { display: flex; gap: 0.5rem; font-size: 10px; color: var(--muted); }
+.sys.off { color: var(--red); }
+.wrow { display: flex; align-items: center; gap: 0.5rem; font-size: 11px; margin-top: 0.2rem; }
+.wrow span { min-width: 110px; }
+.wbar { flex: 1; height: 6px; background: var(--surface-3); border-radius: 3px; overflow: hidden; }
+.wbar i { display: block; height: 100%; }
+.rooms { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 0.4rem; }
+.room { border: 1px solid var(--line); border-radius: 4px; min-height: 40px; padding: 2px 4px; font-size: 9px; color: var(--muted); }
+.room b { display: block; font-size: 9px; color: var(--ink); }
+.cdot {
+  display: inline-block; width: 16px; height: 16px; line-height: 16px; text-align: center;
+  border-radius: 50%; background: var(--accent); color: #04070f;
+  font-size: 10px; font-weight: 900; margin: 1px;
+}
+.crewlog { font-size: 10px; color: var(--muted); margin-top: 0.25rem; }
+.ctask { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#b-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.5rem 0; }
+#b-actions .btn { flex: 1 1 auto; padding: 0.55rem 0.4rem; font-size: 11px; }
+#b-log { flex-basis: 100%; max-height: 110px; overflow-y: auto; font-size: 11px; color: var(--muted);
+  background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.4rem 0.5rem; }

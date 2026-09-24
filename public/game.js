@@ -83,7 +83,7 @@ const EVENTS = {
   pirates: {
     title: 'Spirat Raiders', desc: 'Spirat pirates emerge from an asteroid field, demanding tribute!',
     choices: [
-      { t: 'Fight the pirates', req: {}, out: [['Pirates routed! Their hold is yours. +14 scrap.', [0, 14, -6]], ['They fight dirty. You escape bleeding. -22 hull.', [0, 0, -22]]] },
+      { t: 'Fight the pirates', req: {}, battle: 'pirates', out: [['', [0, 0, 0]]] },
       { t: 'Pay tribute', req: { scrap: 8 }, tribute: true, out: [['They take the scrap and vanish.', [0, -8, 0]]] },
       { t: 'Burn 3 fuel to outrun them', req: { fuel: 3 }, out: [['Clean getaway. -3 fuel.', [-3, 0, 0]], ['They clip your engines. -3 fuel, -8 hull.', [-3, 0, -8]]] },
     ],
@@ -92,7 +92,7 @@ const EVENTS = {
     title: 'Faction Patrol', desc: 'A patrol ship approaches your vessel.',
     choices: [
       { t: 'Hail them peacefully', req: {}, out: [['Protocols exchanged. They share charts. +3 fuel.', [3, 0, 0]], ['They scan you for contraband and fine you. -6 scrap.', [0, -6, 0]]] },
-      { t: 'Prepare for combat', req: {}, out: [['Show of force works. They back off, dropping supplies. +8 scrap.', [0, 8, 0]], ['Skirmish! You win but scarred. -12 hull, +5 scrap.', [0, 5, -12]]] },
+      { t: 'Prepare for combat', req: {}, battle: 'patrol', out: [['', [0, 0, 0]]] },
       { t: 'Burn 2 fuel to avoid them', req: { fuel: 2 }, out: [['Silent running. -2 fuel.', [-2, 0, 0]]] },
     ],
   },
@@ -107,7 +107,7 @@ const EVENTS = {
   distress: {
     title: 'Distress Beacon', desc: 'A damaged ship requests assistance.',
     choices: [
-      { t: 'Answer the call', req: {}, out: [['Grateful crew pays in fuel. +6 fuel, +4 scrap.', [6, 4, 0]], ['A trap! Spirats spring the ambush. -16 hull.', [0, 0, -16]]] },
+      { t: 'Answer the call', req: {}, out: [['Grateful crew pays in fuel. +6 fuel, +4 scrap.', [6, 4, 0]], ['A trap! Spirats spring the ambush.', [0, 0, 0], { battle: 'trap' }]] },
       { t: 'Cautious approach (2 fuel)', req: { fuel: 2 }, out: [['Real survivors. They reward caution. +5 scrap.', [-2, 5, 0]], ['Trap spotted in time. You burn away. -2 fuel.', [-2, 0, 0]]] },
       { t: 'Ignore and continue', req: {}, out: [['You drift on.', [0, 0, 0]]] },
     ],
@@ -131,7 +131,7 @@ const EVENTS = {
   combat: {
     title: 'Hostile Contact', desc: 'Hostile ships block your path!',
     choices: [
-      { t: 'Fight through', req: {}, out: [['Enemy destroyed. Salvage secured. +12 scrap.', [0, 12, -8]], ['Outgunned! You limp away. -24 hull.', [0, 0, -24]]] },
+      { t: 'Fight through', req: {}, battle: 'combat', out: [['', [0, 0, 0]]] },
       { t: 'Burn 4 fuel to evade', req: { fuel: 4 }, out: [['Lost them in the dust. -4 fuel.', [-4, 0, 0]], ['Parting shot hits home. -4 fuel, -10 hull.', [-4, 0, -10]]] },
     ],
   },
@@ -165,6 +165,331 @@ function randomEvent(rng, danger) {
   return 'patrol';
 }
 
+// ---------- FTL battle MVP: ships, auto-crew, stances, negotiation ----------
+const WEAPONS = {
+  laser: { name: 'Laser', dmg: 1, sys: 1, cd: 4, color: '#7dd3fc' },
+  missile: { name: 'Missile', dmg: 3, sys: 2, cd: 7, ammo: 3, color: '#fb923c' },
+  ion: { name: 'Ion', dmg: 0, sys: 3, cd: 5, color: '#c4b5fd' },
+};
+const FOES = {
+  scout: { name: 'Spirat Scout', hull: 12, shield: 1, weapons: ['laser'], loot: [2, 8, 4], crew: 1 },
+  raider: { name: 'Spirat Raider', hull: 18, shield: 1, weapons: ['laser', 'missile'], loot: [3, 12, 6], crew: 2 },
+  frigate: { name: 'Order Frigate', hull: 22, shield: 2, weapons: ['laser', 'laser'], loot: [3, 10, 8], crew: 2 },
+  drone: { name: 'Rogue Drone', hull: 9, shield: 0, weapons: ['ion', 'laser'], loot: [1, 6, 3], crew: 0 },
+};
+const CREW_NAMES = ['Rook', 'Vex', 'Sable', 'Ivo', 'Nyx', 'Pip'];
+const SYS_LABEL = { weapons: 'WPN', engines: 'ENG', shields: 'SHD' };
+let B = null; // battle state
+function mkWeapon(key) {
+  const w = WEAPONS[key];
+  return { key, ...w, charge: 0, ammoLeft: w.ammo ?? null };
+}
+function mkCrew(n) {
+  return Array.from({ length: n }, (_, i) => ({ name: CREW_NAMES[i % CREW_NAMES.length], station: 'weapons', task: 'Manning weapons' }));
+}
+function mkShip(side, base) {
+  return {
+    side, name: base.name, hull: base.hull, maxHull: base.hull,
+    sh: base.shield, maxSh: base.shield, shTick: 0,
+    weapons: base.weapons.map(mkWeapon),
+    sys: { weapons: 2, engines: 2, shields: 2 },
+    crew: mkCrew(base.crew || 0),
+    target: 'weapons', manning: false,
+  };
+}
+function playerLoadout(factionId) {
+  if (G.ship) return [G.ship.w1, G.ship.w2];
+  if (factionId === 'spirats') return ['laser', 'missile'];
+  if (factionId === 'webes') return ['ion', 'laser'];
+  return ['laser', 'laser'];
+}
+// stance: hostile (straight fight) | parley (talk first, holds fire) | friendly (no battle, gift)
+function rollStance(who, danger, rng) {
+  const r = rng();
+  if (who === 'pirates') return r < 0.65 ? 'hostile' : 'parley';
+  if (who === 'patrol') return r < 0.4 ? 'friendly' : r < 0.75 ? 'parley' : 'hostile';
+  if (who === 'trap') return 'hostile';
+  return danger >= 4 ? 'hostile' : r < 0.5 ? 'hostile' : 'parley';
+}
+function pickFoe(who, danger, rng) {
+  if (who === 'patrol') return danger >= 4 ? 'frigate' : 'scout';
+  if (who === 'trap') return 'scout';
+  const r = rng();
+  if (danger >= 4) return r < 0.5 ? 'raider' : 'frigate';
+  return r < 0.6 ? 'scout' : r < 0.85 ? 'drone' : 'raider';
+}
+const TRIBUTE = { pirates: 8, patrol: 6, trap: 8, combat: 8 };
+function startBattle(who, foeKey, stance) {
+  const foe = FOES[foeKey];
+  const player = mkShip('player', {
+    name: 'Your Ship', hull: G.hull, shield: 2,
+    weapons: playerLoadout(G.faction.id), crew: 2,
+  });
+  player.maxHull = G.maxHull;
+  const enemy = mkShip('foe', foe);
+  const scale = 1 + dangerOf(G.nodes.get(G.current)) * 0.06;
+  enemy.hull = enemy.maxHull = Math.round(enemy.hull * scale);
+  B = {
+    who, foeKey, stance, over: false, paused: false, tick: 0,
+    player, enemy, log: [], parleyTicks: stance === 'parley' ? 8 : 0,
+    surrenderOffered: false, tribute: Math.max(4, Math.round((TRIBUTE[who] || 8) * (G.faction.id === 'spirats' && who === 'pirates' ? 0.5 : 1))),
+  };
+  hideModal();
+  battleEl.classList.remove('hidden');
+  blog(`⚔️ ${foe.name} blocks your path!`);
+  if (stance === 'parley') blog('📻 They hail you. Talk or open fire — holding position.');
+  paintBattle();
+  B.timer = setInterval(battleTick, 600);
+  window.__sd.battle = B;
+}
+function blog(msg) {
+  B.log.unshift(`<div>t${B.tick} · ${msg}</div>`);
+  if (B.log.length > 30) B.log.pop();
+  const el = document.getElementById('b-log');
+  if (el) el.innerHTML = B.log.join('');
+}
+function chargeRate(ship) {
+  return (ship.manning ? 1.35 : 1) * (ship.sys.weapons > 0 ? 1 : 0.4);
+}
+function battleTick() {
+  if (!B || B.over || B.paused) return;
+  B.tick++;
+  for (const ship of [B.player, B.enemy]) {
+    if (ship.sys.shields > 0 && ++ship.shTick >= 4) { ship.shTick = 0; ship.sh = Math.min(ship.maxSh, ship.sh + 1); }
+    for (const w of ship.weapons) {
+      if (w.ammoLeft === 0) continue;
+      w.charge += chargeRate(ship);
+      if (w.charge >= w.cd) {
+        w.charge = 0;
+        if (w.ammoLeft != null) w.ammoLeft--;
+        const foe = ship.side === 'player' ? B.enemy : B.player;
+        if (ship.side === 'player' && !B.player.autofireOff) fireWeapon(ship, w, foe, ship.target);
+        else if (ship.side === 'foe') {
+          if (B.parleyTicks > 0) { w.charge = w.cd; continue; } // holding fire during parley
+          fireWeapon(ship, w, foe, ['weapons', 'engines', 'shields'][Math.floor(Math.random() * 3)]);
+        }
+      }
+    }
+  }
+  if (B.parleyTicks > 0) { B.parleyTicks--; if (B.parleyTicks === 0) blog('📻 Patience over. They charge weapons!'); }
+  if (B.tick % 2 === 0) crewAI(B.player);
+  if (B.tick % 2 === 0) crewAI(B.enemy);
+  // enemy morale: weak non-zealots surrender or flee
+  const foe = B.enemy;
+  if (!B.surrenderOffered && foe.hull <= foe.maxHull * 0.35 && foe.hull > 0) {
+    B.surrenderOffered = true;
+    if (B.stance !== 'hostile' || Math.random() < 0.5) {
+      B.paused = true;
+      blog('🏳️ They offer surrender! Accept loot or finish them.');
+      paintBattle();
+      return;
+    }
+  }
+  if (B.stance === 'hostile' && foe.hull <= foe.maxHull * 0.25 && foe.sys.engines > 0 && Math.random() < 0.2) {
+    blog(`💨 ${foe.name} jumps away!`);
+    return endBattle('escaped');
+  }
+  paintBattle();
+}
+function fireWeapon(ship, w, foe, targetSys) {
+  const evade = foe.sys.engines >= 2 && Math.random() < 0.2;
+  if (evade || Math.random() > 0.85) { blog(`${ship.side === 'player' ? 'You' : foe.name} miss${ship.side === 'player' ? '' : 'es'} (${w.name}).`); return; }
+  let dmg = w.dmg, sysDmg = w.sys;
+  if (foe.sh > 0 && dmg > 0) { foe.sh--; dmg--; blog(`🛡️ Shield absorbs ${w.name}.`); if (dmg <= 0 && w.key !== 'missile') return; }
+  if (dmg > 0) {
+    foe.hull -= dmg;
+    blog(`${ship.side === 'player' ? '💥 Hit!' : '🔥 Hull hit!'} ${w.name} → ${dmg} (${foe.name} ${Math.max(0, foe.hull)}).`);
+  }
+  if (sysDmg > 0 && Math.random() < 0.65) {
+    const sys = w.key === 'ion' ? targetSys : ['weapons', 'engines', 'shields'][Math.floor(Math.random() * 3)];
+    if (foe.sys[sys] > 0) {
+      foe.sys[sys] = Math.max(0, foe.sys[sys] - (w.key === 'ion' ? 2 : 1));
+      blog(`⚙️ ${foe.name} ${SYS_LABEL[sys]} damaged (${foe.sys[sys]} left).`);
+    }
+  }
+  if (foe.side === 'player') { G.hull = Math.max(0, B.player.hull); paintHUD(); }
+  if (foe.hull <= 0) return endBattle(foe.side === 'foe' ? 'victory' : 'defeat');
+}
+// auto-crew: repair damaged systems first, else man weapons, else bridge. No manual orders.
+function crewAI(ship) {
+  ship.manning = false;
+  const dmg = ['weapons', 'engines', 'shields'].find(s => ship.sys[s] < 2);
+  let rep = 0;
+  for (const c of ship.crew) {
+    if (dmg && rep < 1) { c.station = dmg; c.task = `Repairing ${SYS_LABEL[dmg]}`; rep++; }
+    else if (!ship.manning) { c.station = 'weapons'; c.task = 'Manning weapons'; ship.manning = true; }
+    else { c.station = 'bridge'; c.task = 'On bridge'; }
+  }
+  if (dmg && ship.crew.some(c => c.station === dmg)) {
+    ship['repair_' + dmg] = (ship['repair_' + dmg] || 0) + 1;
+    if (ship['repair_' + dmg] >= 4) {
+      ship['repair_' + dmg] = 0;
+      ship.sys[dmg] = Math.min(2, ship.sys[dmg] + 1);
+      blog(`🔧 ${ship.side === 'player' ? 'Crew restores' : ship.name + ' restores'} ${SYS_LABEL[dmg]}.`);
+    }
+  }
+}
+function endBattle(result) {
+  if (!B || B.over) return;
+  B.over = true;
+  clearInterval(B.timer);
+  G.hull = Math.max(0, B.player.hull);
+  battleEl.classList.add('hidden');
+  const foe = B.enemy;
+  if (result === 'victory') {
+    G.kills++;
+    const loot = lootFor(B.who);
+    const drop = Math.random() < 0.3 ? foe.weapons[Math.floor(Math.random() * foe.weapons.length)].key : null;
+    const ev = {
+      title: `${foe.name} Destroyed`, desc: `Salvage secured. +${loot[0]} fuel, +${loot[1]} scrap.${drop ? ` They carried a ${WEAPONS[drop].name}!` : ''}`,
+      choices: drop
+        ? [{ t: `Take the ${WEAPONS[drop].name}`, req: {}, loot, swap: drop, out: [[`Weapon installed.`, loot]] },
+           { t: 'Leave it, take salvage', req: {}, loot, out: [[`Salvage secured.`, loot]] }]
+        : [{ t: 'Collect salvage', req: {}, loot, out: [[`Salvage secured.`, loot]] }],
+    };
+    G.activeEvent = ev;
+    paintHUD();
+    showModal();
+  } else if (result === 'defeat') {
+    gameOver(`${foe.name} tore your ship apart.`);
+  } else if (result === 'fled') {
+    G.fuel = Math.max(0, G.fuel - 2);
+    paintHUD();
+    banner('Burned 2 fuel to escape.');
+  } else if (result === 'escaped') {
+    banner(`${foe.name} escaped.`);
+  } else if (result === 'deal') {
+    paintHUD();
+    banner('Deal struck. You part ways.');
+  }
+  B = null;
+  window.__sd.battle = null;
+}
+function lootFor(who) {
+  const d = dangerOf(G.nodes.get(G.current));
+  const base = { pirates: [2, 12], patrol: [3, 10], trap: [2, 8], combat: [3, 12] }[who] || [2, 10];
+  return [base[0] + Math.floor(d / 2), base[1] + d * 2, 0];
+}
+// player actions (buttons; battle runs in real time)
+function bTarget() {
+  if (!B || B.over) return;
+  const order = ['weapons', 'engines', 'shields'];
+  B.player.target = order[(order.indexOf(B.player.target) + 1) % 3];
+  blog(`🎯 Targeting ${SYS_LABEL[B.player.target]}.`);
+  paintBattle();
+}
+function bPause() {
+  if (!B || B.over) return;
+  B.paused = !B.paused;
+  blog(B.paused ? '⏸ Paused.' : '▶ Resumed.');
+  paintBattle();
+}
+function bFlee() {
+  if (!B || B.over || B.paused) return;
+  const eng = B.player.sys.engines;
+  if (eng <= 0) { blog('❌ Engines dead — cannot flee!'); paintBattle(); return; }
+  if (Math.random() < 0.55 + 0.1 * eng) {
+    blog('💨 Jump plotted — escaping!');
+    endBattle('fled');
+  } else {
+    blog('❌ Flee failed! They fire a parting volley.');
+    for (const w of B.enemy.weapons) if (w.charge >= w.cd - 2) { w.charge = w.cd; }
+    battleTick();
+  }
+}
+function bTalk(mode) {
+  if (!B || B.over) return;
+  B.player.autofireOff = mode === 'talk' ? true : B.player.autofireOff;
+  if (mode === 'talk') {
+    B.stance = 'parley'; B.parleyTicks = Math.max(B.parleyTicks, 6);
+    blog(`📻 You open a channel. Demand tribute, pay ${B.tribute} scrap, or open fire.`);
+  } else if (mode === 'fire') {
+    B.player.autofireOff = false; B.stance = 'hostile'; B.parleyTicks = 0;
+    blog('🔥 Weapons free!');
+  } else if (mode === 'pay') {
+    if (G.scrap < B.tribute) { blog('❌ Not enough scrap.'); paintBattle(); return; }
+    G.scrap -= B.tribute;
+    blog(`🤝 Paid ${B.tribute} scrap. They let you pass.`);
+    endBattle('deal');
+    return;
+  } else if (mode === 'demand') {
+    const intimidate = G.kills * 0.12 + (B.enemy.hull < B.enemy.maxHull * 0.6 ? 0.35 : 0);
+    if (Math.random() < 0.25 + intimidate) {
+      const loot = lootFor(B.who);
+      blog(`😤 They yield! +${loot[0]} fuel, +${loot[1]} scrap.`);
+      G.activeEvent = { key: '__loot', nodeId: G.current, ev: { title: 'Tribute Paid', desc: 'They hand over cargo and withdraw.', choices: [{ t: 'Take it', req: {}, loot, out: [['Tribute secured.', loot]] }] } };
+      B.over = true; clearInterval(B.timer);
+      battleEl.classList.add('hidden');
+      B = null; window.__sd.battle = null;
+      paintHUD(); showModal();
+    } else {
+      blog('😡 They laugh at your demand. Weapons free!');
+      B.stance = 'hostile'; B.parleyTicks = 0; B.player.autofireOff = false;
+    }
+  } else if (mode === 'accept') {
+    const loot = [Math.floor(B.enemy.maxHull / 6), Math.floor(B.enemy.maxHull / 2), 0];
+    blog(`🏳️ Surrender accepted. +${loot[0]} fuel, +${loot[1]} scrap.`);
+    G.activeEvent = { key: '__loot', nodeId: G.current, ev: { title: 'Surrender Accepted', desc: 'They jettison cargo and limp away.', choices: [{ t: 'Take it', req: {}, loot, out: [['Cargo secured.', loot]] }] } };
+    B.over = true; clearInterval(B.timer);
+    battleEl.classList.add('hidden');
+    B = null; window.__sd.battle = null;
+    paintHUD(); showModal();
+  } else if (mode === 'refuse') {
+    B.paused = false; B.stance = 'hostile';
+    blog('🔥 No mercy. Finish them!');
+  }
+  paintBattle();
+}
+
+function sysPips(ship) {
+  return ['weapons', 'engines', 'shields'].map(s =>
+    `<span class="sys ${ship.sys[s] ? '' : 'off'}" title="${SYS_LABEL[s]}">${SYS_LABEL[s]}${'●'.repeat(ship.sys[s])}${'○'.repeat(2 - ship.sys[s])}</span>`).join('');
+}
+function shipCard(ship, foe) {
+  const hullPct = Math.max(0, Math.round(100 * ship.hull / ship.maxHull));
+  const weapons = ship.weapons.map(w => {
+    const pct = Math.min(100, Math.round(100 * w.charge / w.cd));
+    const ammo = w.ammoLeft != null ? ` ×${w.ammoLeft}` : '';
+    return `<div class="wrow"><span style="color:${w.color}">▮ ${w.name}${ammo}</span><div class="wbar"><i style="width:${pct}%;background:${w.color}"></i></div></div>`;
+  }).join('');
+  const rooms = ['weapons', 'engines', 'shields', 'bridge'].map(r => {
+    const here = ship.crew.filter(c => c.station === (r === 'bridge' ? 'bridge' : r));
+    const dots = here.map(c => `<span class="cdot" title="${c.name}: ${c.task}">${c.name[0]}</span>`).join('');
+    return `<div class="room" data-r="${r}"><b>${r === 'bridge' ? 'BRD' : SYS_LABEL[r]}</b>${dots}</div>`;
+  }).join('');
+  const tasks = ship.crew.map(c => `<div class="ctask">${c.name}: ${c.task}</div>`).join('');
+  const sh = '⬢'.repeat(ship.sh) + '◇'.repeat(Math.max(0, ship.maxSh - ship.sh));
+  return `<div class="ship ${foe ? 'foe' : ''}">
+    <div class="shead"><b>${ship.name}</b><span class="shp">${sh}</span></div>
+    <div class="hbar"><i style="width:${hullPct}%"></i><span>${Math.max(0, Math.ceil(ship.hull))}/${ship.maxHull}</span></div>
+    <div class="sysrow">${sysPips(ship)}</div>
+    <div class="wlist">${weapons}</div>
+    <div class="rooms">${rooms}</div>
+    <div class="crewlog">${tasks || '<div class="ctask">No crew — automated.</div>'}</div>
+  </div>`;
+}
+function paintBattle() {
+  if (!B) return;
+  const foe = document.getElementById('b-foe'), pl = document.getElementById('b-player'), act = document.getElementById('b-actions');
+  foe.innerHTML = shipCard(B.enemy, true);
+  pl.innerHTML = shipCard(B.player, false);
+  let btns = '';
+  if (B.paused && B.surrenderOffered) {
+    btns = `<button class="btn btn-primary" onclick="bTalk('accept')">Accept surrender</button>
+      <button class="btn" onclick="bTalk('refuse')">No mercy</button>`;
+  } else if (B.stance === 'parley' && B.parleyTicks > 0) {
+    btns = `<button class="btn btn-primary" onclick="bTalk('fire')">🔥 Open fire</button>
+      <button class="btn" onclick="bTalk('demand')">😤 Demand tribute</button>
+      <button class="btn" onclick="bTalk('pay')">🤝 Pay ${B.tribute} scrap</button>`;
+  } else {
+    btns = `<button class="btn" onclick="bTarget()">🎯 ${SYS_LABEL[B.player.target]}</button>
+      <button class="btn" onclick="bTalk('talk')">📻 Talk</button>
+      <button class="btn" onclick="bFlee()">💨 Flee</button>
+      <button class="btn" onclick="bPause()">${B.paused ? '▶' : '⏸'}</button>`;
+  }
+  act.innerHTML = btns + `<div id="b-log">${B.log.join('')}</div>`;
+}
+
 // ---------- theme (single source: theme.css; canvas follows DOM) ----------
 const TH = {};
 function readTheme() {
@@ -178,6 +503,7 @@ const ctx = canvas.getContext('2d');
 const menuEl = document.getElementById('menu');
 const overEl = document.getElementById('over');
 const modalEl = document.getElementById('modal');
+const battleEl = document.getElementById('battle');
 const hudEl = document.getElementById('hud');
 let W = 0, H = 0;
 function resize() {
@@ -281,6 +607,8 @@ function expandAround(id, avoidId) {
 }
 
 function startRun(faction) {
+  if (B) { clearInterval(B.timer); B = null; window.__sd.battle = null; }
+  battleEl.classList.add('hidden');
   G.faction = faction;
   G.rng = mulberry32((Math.random() * 0xFFFFFFFF) >>> 0);
   G.nodes.clear(); G.nextId = 1;
@@ -289,6 +617,8 @@ function startRun(faction) {
   G.maxHull = 100;
   G.hull = 100 + (faction.id === 'celestials' ? 20 : 0);
   G.jumps = 0; G.kills = 0;
+  G.ship = faction.id === 'spirats' ? { w1: 'laser', w2: 'missile' }
+    : faction.id === 'webes' ? { w1: 'ion', w2: 'laser' } : { w1: 'laser', w2: 'laser' };
   G.activeEvent = null; G.outcome = null;
   const start = addNode('Station', 0, 0);
   G.nodes.get(start).visited = true;
@@ -348,9 +678,32 @@ function dangerOf(node) {
 
 function choose(i) {
   const ev = G.activeEvent;
-  if (!ev || G.outcome) return;
+  if (!ev || !ev.choices || G.outcome) return;
   const c = ev.choices[i];
   if (!c || !canPay(c.req || {})) return;
+  // loot pickup (post-battle / tribute / surrender)
+  if (c.loot) {
+    applyDelta(c.loot);
+    if (c.swap) { G.ship.w2 = c.swap; }
+    paintHUD();
+    return closeEvent(`${ev.title} — ${c.out[0][0]}`);
+  }
+  // ship combat routing: stance roll decides hostile / parley / friendly
+  if (c.battle) {
+    const who = c.battle;
+    const node = G.nodes.get(G.current);
+    const danger = dangerOf(node);
+    const stance = rollStance(who, danger, G.rng);
+    G.activeEvent = null;
+    if (stance === 'friendly') {
+      const gift = who === 'patrol' ? [3, 4, 0] : [2, 6, 0];
+      applyDelta(gift);
+      paintHUD();
+      hideModal();
+      return banner(`FRIENDLY CONTACT · +${gift[0]} FUEL +${gift[1]} SCRAP`);
+    }
+    return startBattle(who, pickFoe(who, danger, G.rng), stance);
+  }
   // faction shortcuts: fixed good outcome, no gamble
   let pick = null;
   if (c.webes && G.faction.id === 'webes') pick = 0;
@@ -366,9 +719,13 @@ function choose(i) {
     const badOdds = clamp(0.25 + danger * 0.06 - (G.faction.id === 'celestials' ? 0.1 : 0), 0.1, 0.75);
     pick = (c.out.length > 1 && G.rng() < badOdds) ? 1 : 0;
   }
-  const [text, delta] = c.out[pick];
+  const [text, delta, extra] = c.out[pick];
   applyDelta(delta);
   paintHUD();
+  if (extra && extra.battle) {
+    G.activeEvent = null;
+    return startBattle(extra.battle, 'scout', 'hostile');
+  }
   closeEvent(`${ev.title} — ${text}`);
 }
 
@@ -677,5 +1034,5 @@ for (const f of FACTIONS) {
   fdiv.appendChild(b);
 }
 document.getElementById('again').addEventListener('click', () => startRun(G.faction));
-window.__sd = { G, travelTo, choose, startRun }; // test hook
+window.__sd = { G, travelTo, choose, startRun, startBattle, bTarget, bTalk, bFlee, bPause }; // test hook
 requestAnimationFrame(frame);
