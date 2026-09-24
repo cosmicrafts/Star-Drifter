@@ -77,6 +77,20 @@ jobs:
           rm -f /tmp/sd-nginx.conf
           REMOTE
 
+      - name: Purge Cloudflare edge (stable filenames, no mixing)
+        run: |
+          # game.js/style.css keep their names between deploys, so the edge
+          # would mix old JS with new HTML for up to 1h. Purge the entry
+          # points on every deploy; everything else self-heals in 1h.
+          curl -s --max-time 30 -X POST \
+            "https://api.cloudflare.com/client/v4/zones/c8ff09bb333a85425a478417849f1563/purge_cache" \
+            -H "X-Auth-Email: ohsalmeron@gmail.com" \
+            -H "X-Auth-Key: ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data '{"files":["https://stardrifter.cosmicrafts.com/","https://stardrifter.cosmicrafts.com/game.js","https://stardrifter.cosmicrafts.com/style.css"]}' \
+            | grep -q '"success":true' || { echo "PURGE FAILED"; exit 1; }
+          echo "edge purged"
+
       - name: Verify Live Site
         run: |
           set -e
