@@ -222,15 +222,54 @@ function link(a, b) {
   if (!A.links.includes(b)) A.links.push(b);
   if (!B.links.includes(a)) B.links.push(a);
 }
+// Port of Bevy generate_nodes_around: forward 120° cone away from source,
+// reuse an existing node in range before creating, push-out on collision.
+function hashId(id) {
+  let h = (id * 2654435761) >>> 0;
+  h ^= h >>> 15; h = (h * 0x85ebca6b) >>> 0; h ^= h >>> 13;
+  return h >>> 0;
+}
 function expandAround(id, avoidId) {
   const src = G.nodes.get(id);
-  const n = 2 + Math.floor(G.rng() * 3);
-  const baseA = Math.atan2(src.y - (G.nodes.get(avoidId)?.y ?? src.y - 1), src.x - (G.nodes.get(avoidId)?.x ?? src.x - 1));
-  for (let i = 0; i < n; i++) {
-    const a = baseA + (G.rng() - 0.5) * 2.4 + (i - (n - 1) / 2) * 0.5;
-    const d = 230 + G.rng() * 130;
-    const nid = addNode(sectorType(G.rng, G.jumps), src.x + Math.cos(a) * d, src.y + Math.sin(a) * d);
-    link(id, nid);
+  const avoid = avoidId != null ? G.nodes.get(avoidId) : null;
+  const MIN_SEP = 120, BASE_D = 300, RANGE = BASE_D * 1.8;
+  let baseA;
+  if (avoid && (src.x - avoid.x) ** 2 + (src.y - avoid.y) ** 2 > 0.0001) {
+    baseA = Math.atan2(src.y - avoid.y, src.x - avoid.x);
+  } else {
+    baseA = (hashId(id) / 0xFFFFFFFF) * TAU; // deterministic fallback
+  }
+  const slots = 2 + Math.floor(G.rng() * 3);
+  const ARC = (Math.PI * 2) / 3; // 120 degrees
+  const step = slots > 1 ? ARC / (slots - 1) : 0;
+  const used = new Set();
+  for (let i = 0; i < slots; i++) {
+    const angle = baseA - ARC / 2 + step * i + (G.rng() - 0.5) * 0.3;
+    const dx = Math.cos(angle), dy = Math.sin(angle);
+    // 1. connect to an existing node in range + direction instead of creating
+    let best = null, bd = RANGE;
+    for (const o of G.nodes.values()) {
+      if (o.id === id || o.id === avoidId || src.links.includes(o.id) || used.has(o.id)) continue;
+      const dc = Math.hypot(o.x - src.x, o.y - src.y);
+      if (dc > RANGE || dc < MIN_SEP) continue;
+      if (((o.x - src.x) * dx + (o.y - src.y) * dy) / (dc || 1) <= 0.5) continue; // ~60°
+      const di = Math.hypot(o.x - (src.x + dx * BASE_D), o.y - (src.y + dy * BASE_D));
+      if (di < bd) { bd = di; best = o; }
+    }
+    if (best) { used.add(best.id); link(id, best.id); continue; }
+    // 2. new node, pushing the radius out until clear
+    let radius = BASE_D, px = src.x + dx * radius, py = src.y + dy * radius;
+    for (;;) {
+      let close = false;
+      for (const o of G.nodes.values()) {
+        if (o.id === id) continue;
+        if (Math.hypot(o.x - px, o.y - py) < MIN_SEP) { close = true; break; }
+      }
+      if (!close || radius > BASE_D * 3) break;
+      radius += 50;
+      px = src.x + dx * radius; py = src.y + dy * radius;
+    }
+    link(id, addNode(sectorType(G.rng, G.jumps), px, py));
   }
 }
 
