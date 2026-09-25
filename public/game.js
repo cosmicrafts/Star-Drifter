@@ -244,6 +244,7 @@ function startBattle(who, foeKey, stance) {
       const foekind = who === 'patrol' ? 'patrol' : who === 'combat' ? 'drone' : 'pirate';
       foeActor = mkActor(foekind, S.anchor.x + 44, S.anchor.y - 12, {
         color: who === 'patrol' ? '#a5b4fc' : who === 'combat' ? '#e879f9' : '#f0abfc',
+        face: Math.PI, // 1: enemies face you, not away
       });
       S.actors.push(foeActor);
     }
@@ -268,7 +269,7 @@ function blog(msg) {
   if (el) el.innerHTML = B.log.join('');
 }
 function chargeRate(ship) {
-  return (ship.manning ? 1.35 : 1) * (ship.sys.weapons > 0 ? 1 : 0.4);
+  return 0.6 * (ship.manning ? 1.35 : 1) * (ship.sys.weapons > 0 ? 1 : 0.4); // 2: seconds per tick (600ms), not 1
 }
 function battleTick() {
   if (!B || B.over || B.paused) return;
@@ -522,8 +523,8 @@ function paintBattle() {
       { t: 'No mercy', fn: () => bTalk('refuse') },
     ] });
   } else {
-    codecSay({ ...SPEAKERS.self, text: battleStatusText(), choices: [
-      { t: `🎯 ${SYS_LABEL[B.player.target]}`, fn: () => bTarget() },
+    // 5: real orders, no cryptic cycle button — click the enemy ship to refocus
+    codecSay({ ...SPEAKERS.self, text: battleStatusText() + ' — 🎯 click enemy ship to focus: ' + SYS_LABEL[B.player.target], choices: [
       { t: '📻 Talk', fn: () => bTalk('talk') },
       { t: '💨 Flee', fn: () => bFlee() },
     ] });
@@ -646,7 +647,7 @@ const SCENES = {
   combat: (n, who) => {
     const col = who === 'pirates' ? '#f0abfc' : who === 'patrol' ? '#a5b4fc' : '#e879f9';
     const kind = who === 'pirates' ? 'pirate' : who === 'patrol' ? 'patrol' : 'drone';
-    const m = who === 'pirates' ? [mkActor(kind, n.x + 42, n.y - 16, { color: col }), mkActor(kind, n.x + 55, n.y + 20, { color: '#f0abfc' })] : [mkActor(kind, n.x + 44, n.y - 12, { color: col })];
+    const m = who === 'pirates' ? [mkActor(kind, n.x + 42, n.y - 16, { color: col, face: Math.PI }), mkActor(kind, n.x + 55, n.y + 20, { color: '#f0abfc', face: Math.PI })] : [mkActor(kind, n.x + 44, n.y - 12, { color: col, face: Math.PI })];
     return m;
   },
   merchant: n => [mkActor('merchant', n.x + 44, n.y - 12, { color: '#fbbf24', orb: 5 })],
@@ -1206,7 +1207,18 @@ window.addEventListener('pointermove', e => {
 window.addEventListener('pointerup', e => {
   if (!drag.on) return;
   drag.on = false;
-  if (drag.moved || G.screen !== 'play' || G.activeEvent || G.scene || G.camAnim || B) return;
+  if (drag.moved || G.screen !== 'play' || G.activeEvent || G.scene || G.camAnim || B) {
+    // 4: during a fight, clicking the enemy ship cycles your target system
+    if (B && !B.over && G.scene && !drag.moved) {
+      const fa = G.scene.actors.find(a => a.hp === B.enemy);
+      if (fa) {
+        const sx = e.clientX, sy = e.clientY;
+        const fx = (fa.x - G.cam.x) * G.cam.z + W / 2, fy = (fa.y - G.cam.y) * G.cam.z + H / 2;
+        if (Math.hypot(sx - fx, sy - fy) < 70) { bTarget(); floatText(fa.x, fa.y - 40, `TARGET: ${SYS_LABEL[B.player.target]}`, '#f87171'); }
+      }
+    }
+    return;
+  }
   const w = toWorld(e.clientX, e.clientY);
   let best = null, bd = (34 / G.cam.z) ** 2;
   for (const n of G.nodes.values()) {
@@ -1375,6 +1387,31 @@ function drawActorBar(a) {
   ctx.fillRect(ax - w / 2 + 1, ay - 45, w * pct - 2, 5);
   ctx.fillStyle = '#7dd3fc';
   for (let i = 0; i < s.sh; i++) ctx.fillRect(ax - w / 2 + i * 8, ay - 54, 6, 4);
+  // 3: per-weapon charge bars under the hull bar — you SEE them arm, no text decoding
+  if (s.weapons && !a.foe) {
+    for (let i = 0; i < s.weapons.length; i++) {
+      const wp = s.weapons[i];
+      const pct = Math.min(1, wp.charge / wp.cd);
+      const bw = 38, bx = ax - (s.weapons.length * (bw + 4) - 4) / 2 + i * (bw + 4);
+      ctx.fillStyle = 'rgba(148,163,184,0.25)';
+      ctx.fillRect(bx, ay - 38, bw, 3);
+      ctx.fillStyle = wp.color;
+      ctx.fillRect(bx, ay - 38, bw * pct, 3);
+    }
+  }
+  // 4: enemy systems clickable — labels under the foe, current target highlighted
+  if (a.foe && window.__sd && window.__sd.battle && !window.__sd.battle.over) {
+    const Bx = window.__sd.battle;
+    const labels = ['weapons', 'engines', 'shields'];
+    ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    for (let i = 0; i < labels.length; i++) {
+      const lx = ax - 36 + i * 36;
+      const hot = Bx.player.target === labels[i];
+      ctx.fillStyle = hot ? '#f87171' : 'rgba(148,163,184,0.6)';
+      ctx.fillText((hot ? '▶' : '') + SYS_LABEL[labels[i]], lx, ay + 52);
+      if (hot) { ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(lx, ay + 40, 12, 0, TAU); ctx.stroke(); }
+    }
+  }
   if (a.crewLine) {
     ctx.fillStyle = 'rgba(148,163,184,0.9)';
     ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
