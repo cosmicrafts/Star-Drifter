@@ -139,10 +139,3 @@ html, body {
 }
 #codec-choices { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.6rem; }
 #codec-choices .btn { padding: 0.5rem 0.7rem; font-size: 11px; }
-#s-actions {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
-  display: flex; gap: 0.4rem; justify-content: center; padding: 0.6rem;
-  background: linear-gradient(180deg, transparent, rgba(2,6,16,0.85));
-}
-#s-actions .btn { padding: 0.55rem 0.8rem; font-size: 11px; }
-#s-actions.with-codec { bottom: 165px; background: none; }

@@ -242,15 +242,21 @@ function startBattle(who, foeKey, stance) {
     if (!foeActor) {
       // stage a visual enemy so the scene always shows the ship you're fighting
       const foekind = who === 'patrol' ? 'patrol' : who === 'combat' ? 'drone' : 'pirate';
-      foeActor = mkActor(foekind, S.anchor.x + 160, S.anchor.y - 20, {
+      foeActor = mkActor(foekind, S.anchor.x + 44, S.anchor.y - 12, {
         color: who === 'patrol' ? '#a5b4fc' : who === 'combat' ? '#e879f9' : '#f0abfc',
       });
       S.actors.push(foeActor);
     }
     foeActor.hp = B.enemy; foeActor.foe = true;
+    B.enemy.actor = foeActor;
+    S.player.hp.actor = S.player;
   }
   const sp = who === 'pirates' || who === 'trap' ? SPEAKERS.pirate : who === 'patrol' ? SPEAKERS.patrol : SPEAKERS.logging;
-  codecSay({ ...sp, text: stance === 'parley' ? 'Holding position. Talk, pay tribute, or open fire — your call, Drifter.' : `${foe.name} blocks your path! Weapons hot, hold steady.` });
+  void sp;
+  if (stance === 'hostile' && G.scene) {
+    const fa = G.scene.actors.find(a => a.foe) || G.scene.actors[G.scene.actors.length - 1];
+    if (fa) floatText(fa.x, fa.y - 60, 'HOSTILE!', '#f87171');
+  }
   paintBattle();
   B.timer = setInterval(battleTick, 600);
   window.__sd.battle = B;
@@ -307,8 +313,7 @@ function battleTick() {
 }
 function fireWeapon(ship, w, foe, targetSys) {
   const S = G.scene;
-  const A = ship.side === 'player' ? S?.player : S?.actors[S.actors.length - 2];
-  const Ta = shieldVisualFor(foe);
+  const A = ship.actor, Ta = shieldVisualFor(foe);
   if (A && Ta && Ta.kind !== 'player') {
     spawnShot(A, Ta, w.color, w.key === 'missile' ? 5 : 3);
   }
@@ -342,9 +347,7 @@ function fireWeapon(ship, w, foe, targetSys) {
   if (foe.hull <= 0) return endBattle(foe.side === 'foe' ? 'victory' : 'defeat');
 }
 function shieldVisualFor(ship) {
-  if (!G.scene) return null;
-  if (ship.side === 'player') return G.scene.player;
-  return G.scene.actors[G.scene.actors.length - 2] || G.scene.actors[0];
+  return ship.actor || null;
 }
 // auto-crew: repair damaged systems first, else man weapons, else bridge. No manual orders.
 function crewAI(ship) {
@@ -370,7 +373,6 @@ function endBattle(result) {
   B.over = true;
   clearInterval(B.timer);
   G.hull = Math.max(0, B.player.hull);
-  document.getElementById('s-actions').classList.add('hidden');
   const foe = B.enemy;
   const S = G.scene;
   const foeActor = S ? S.actors.filter(a => a.foe || a.kind === 'pirate' || a.kind === 'patrol' || a.kind === 'drone').reverse()[0] : null;
@@ -492,28 +494,53 @@ function bTalk(mode) {
   paintBattle();
 }
 
-// slim action bar over the scene (ships/bars live on canvas now)
+// ---------- battle UI: codec IS the interface (6) ----------
+// phase-aware buttons; codec text shows a one-line status, no typewriter spam in fight.
+function battlePhase() {
+  if (B.paused && B.surrenderOffered) return 'surrender';
+  if (B.stance === 'parley' && B.parleyTicks > 0) return 'parley';
+  return 'fight';
+}
 function paintBattle() {
-  if (!B) { document.getElementById('s-actions').classList.add('hidden'); return; }
-  const act = document.getElementById('s-actions');
-  act.classList.remove('hidden');
-  let btns = '';
-  if (B.paused && B.surrenderOffered) {
-    codecSay({ name: B.enemy.name, color: '#f87171', glyph: '☠', text: 'We surrender! Take our cargo and let us live.',
-      choices: [{ t: 'Accept surrender', fn: () => bTalk('accept') }, { t: 'No mercy', fn: () => bTalk('refuse') }] });
-    btns = '';
-  } else if (B.stance === 'parley' && B.parleyTicks > 0) {
-    btns = `<button class="btn btn-primary" onclick="bTalk('fire')">🔥 OPEN FIRE</button>
-      <button class="btn" onclick="bTalk('demand')">😤 TRIBUTE</button>
-      <button class="btn" onclick="bTalk('pay')">🤝 ${B.tribute}⛁</button>`;
+  if (!B) return;
+  const phase = battlePhase();
+  if (phase === B.uiPhase) { battleStatusLine(); return; } // buttons stable; refresh text only
+  B.uiPhase = phase;
+  const foeSp = B.who === 'pirates' || B.who === 'trap' ? SPEAKERS.pirate
+    : B.who === 'patrol' ? SPEAKERS.patrol
+    : { name: B.enemy.name, color: '#e879f9', glyph: '◮' };
+  if (phase === 'parley') {
+    codecSay({ ...foeSp, text: 'They hold fire — for now. Talk, pay, or shoot first.', choices: [
+      { t: `Open fire`, primary: true, fn: () => bTalk('fire') },
+      { t: `Demand tribute`, fn: () => bTalk('demand') },
+      { t: `Pay ${B.tribute}⛁`, fn: () => bTalk('pay') },
+      { t: 'Flee', fn: () => bFlee() },
+    ] });
+  } else if (phase === 'surrender') {
+    codecSay({ ...foeSp, text: 'We surrender! Take the cargo and let us live.', choices: [
+      { t: 'Accept surrender', primary: true, fn: () => bTalk('accept') },
+      { t: 'No mercy', fn: () => bTalk('refuse') },
+    ] });
   } else {
-    btns = `<button class="btn" onclick="bTarget()">🎯 ${SYS_LABEL[B.player.target]}</button>
-      <button class="btn" onclick="bTalk('talk')">📻 TALK</button>
-      <button class="btn" onclick="bFlee()">💨 FLEE</button>
-      <button class="btn" onclick="bPause()">${B.paused ? '▶' : '⏸'}</button>`;
+    codecSay({ ...SPEAKERS.self, text: battleStatusText(), choices: [
+      { t: `🎯 ${SYS_LABEL[B.player.target]}`, fn: () => bTarget() },
+      { t: '📻 Talk', fn: () => bTalk('talk') },
+      { t: '💨 Flee', fn: () => bFlee() },
+    ] });
   }
-  act.innerHTML = btns;
-  act.classList.toggle('with-codec', !document.getElementById('codec').classList.contains('hidden'));
+}
+function battleStatusText() {
+  if (!B) return '';
+  const wps = B.player.weapons.map(w => {
+    const pct = Math.min(100, Math.round(100 * w.charge / w.cd));
+    const ammo = w.ammoLeft != null ? ` ×${w.ammoLeft}` : '';
+    return `${w.name}${ammo} ${pct >= 100 ? 'READY' : pct + '%'}`;
+  }).join(' · ');
+  return `⚙ auto · ${wps}`;
+}
+function battleStatusLine() {
+  const el = document.getElementById('codec-text');
+  if (el && B && battlePhase() === 'fight') el.textContent = battleStatusText();
 }
 
 // ---------- codec dialogue (MGS-style) ----------
@@ -538,7 +565,6 @@ function codecPortrait(sp, t) {
 let codecTimer = null;
 function codecSay(sp, t) {
   codecEl.classList.remove('hidden');
-  document.getElementById('s-actions').classList.add('with-codec');
   if (codecTimer) clearInterval(codecTimer);
   document.getElementById('codec-name').textContent = sp.name || '???';
   codecPortrait(sp, 0);
@@ -574,7 +600,6 @@ function codecSay(sp, t) {
 function codecClear() {
   codecEl.classList.add('hidden');
   document.getElementById('codec-choices').innerHTML = '';
-  document.getElementById('s-actions').classList.remove('with-codec');
   if (codecTimer) clearInterval(codecTimer);
   codecTimer = null;
 }
@@ -611,27 +636,27 @@ function mkActor(kind, x, y, opts) {
   return a;
 }
 const SECTOR_STAGE = {
-  Station: n => [mkActor('station', n.x + 40, n.y - 70, { color: '#fbbf24' })],
-  Nebula: n => [mkActor('anomaly', n.x - 100, n.y + 150, { color: '#818cf8' })],
-  AsteroidField: n => [mkActor('rocks', n.x, n.y - 130, {}), mkActor('rocks', n.x + 10, n.y + 170, {})],
-  CelestialSite: n => [mkActor('ruins', n.x + 20, n.y - 90, { color: '#7dd3fc' })],
-  DarkRift: n => [mkActor('rift', n.x + 30, n.y - 90, { color: '#e879f9' })],
+  Station: n => [mkActor('station', n.x + 5, n.y - 25, { color: '#fbbf24' })],
+  Nebula: n => [mkActor('anomaly', n.x - 30, n.y + 40, { color: '#818cf8' })],
+  AsteroidField: n => [mkActor('rocks', n.x, n.y - 40, {}), mkActor('rocks', n.x + 5, n.y + 45, {})],
+  CelestialSite: n => [mkActor('ruins', n.x + 5, n.y - 30, { color: '#7dd3fc' })],
+  DarkRift: n => [mkActor('rift', n.x + 5, n.y - 30, { color: '#e879f9' })],
 };
 const SCENES = {
   combat: (n, who) => {
     const col = who === 'pirates' ? '#f0abfc' : who === 'patrol' ? '#a5b4fc' : '#e879f9';
     const kind = who === 'pirates' ? 'pirate' : who === 'patrol' ? 'patrol' : 'drone';
-    const m = who === 'pirates' ? [mkActor(kind, n.x + 150, n.y - 70, { color: col }), mkActor(kind, n.x + 190, n.y + 90, { color: shade(col, 1) })] : [mkActor(kind, n.x + 160, n.y - 20, { color: col })];
+    const m = who === 'pirates' ? [mkActor(kind, n.x + 42, n.y - 16, { color: col }), mkActor(kind, n.x + 55, n.y + 20, { color: '#f0abfc' })] : [mkActor(kind, n.x + 44, n.y - 12, { color: col })];
     return m;
   },
-  merchant: n => [mkActor('merchant', n.x + 160, n.y - 30, { color: '#fbbf24', orb: 10 })],
-  patrol: n => SECTOR_STAGE.Station(n).concat([mkActor('patrol', n.x + 150, n.y + 60, { color: '#a5b4fc' })]),
-  derelict: n => [mkActor('derelict', n.x + 140, n.y - 60, {})],
-  anomaly: n => [mkActor('anomaly', n.x + 150, n.y - 40, {})],
-  celestial: n => [mkActor('ruins', n.x + 40, n.y - 90, { color: '#7dd3fc' })],
-  darkrift: n => [mkActor('rift', n.x + 30, n.y - 90, { color: '#e879f9' })],
-  mining: n => [mkActor('rocks', n.x + 30, n.y - 140, {}), mkActor('rocks', n.x - 60, n.y + 160, {})],
-  distress: n => [mkActor('derelict', n.x + 140, n.y - 60, {})],
+  merchant: n => [mkActor('merchant', n.x + 44, n.y - 12, { color: '#fbbf24', orb: 5 })],
+  patrol: n => SCENES.combat(n, 'patrol'),
+  derelict: n => [mkActor('derelict', n.x + 34, n.y - 20, {})],
+  anomaly: n => [mkActor('anomaly', n.x + 38, n.y - 14, {})],
+  celestial: n => [mkActor('ruins', n.x + 5, n.y - 30, { color: '#7dd3fc' })],
+  darkrift: n => [mkActor('rift', n.x + 5, n.y - 30, { color: '#e879f9' })],
+  mining: n => [mkActor('rocks', n.x, n.y - 40, {}), mkActor('rocks', n.x - 20, n.y + 40, {})],
+  distress: n => [mkActor('derelict', n.x + 32, n.y - 18, {})],
   station: n => SECTOR_STAGE.Station(n),
   pirates: n => SCENES.combat(n, 'pirates'),
   trap: n => SCENES.combat(n, 'pirates'),
@@ -642,20 +667,17 @@ function enterScene(node) {
   G.scene = {
     nodeId: node.id, anchor: { x: node.x, y: node.y },
     actors: [], parts: [], shots: [], floats: [],
-    player: mkActor('player', node.x + 190, node.y + 90, { color: '#22d3ee', face: Math.PI }),
+    player: mkActor('player', node.x - 42, node.y + 6, { color: '#22d3ee', face: 0 }),
   };
-  G.scene.player.crewLine = 'Rook: Manning weapons · Vex: On bridge';
-  const extra = (SECTOR_STAGE[node.type] ? SECTOR_STAGE[node.type](node) : []);
-  G.scene.actors = G.scene.actors.concat(extra);
+  G.scene.player.crewLine = 'Rook · Vex';
 }
 function exitScene() {
   codecClear();
-  document.getElementById('s-actions').classList.add('hidden');
   const node = G.nodes.get(G.current);
   if (!node) { G.scene = null; return; }
   G.scene = null;
-  const z = Math.min(1.1, Math.min(W, H) / 820);
-  flyTo(node.x, node.y, z, 850, () => { });
+  const mv = G.mapView || { z: Math.min(1.1, Math.min(W, H) / 820) };
+  flyTo(mv.x ?? node.x, mv.y ?? node.y, mv.z, 900, () => { });
 }
 function travelTo(id) {
   if (G.activeEvent || G.scene || G.screen !== 'play') return;
@@ -670,28 +692,105 @@ function travelTo(id) {
   node.visited = true;
   G.current = id;
   if (first) expandAround(id, cur.id);
-  // cinematic fly-in, then crew line + encounter
-  const zi = Math.min(1.6, Math.min(W, H) / 520);
-  flyTo(node.x, node.y, zi, 900, () => {
+  // 1-2: ship flies along the link, camera follows and dives INTO the node
+  G.mapView = { x: cur.x, y: cur.y, z: G.cam.z };
+  G.traveler = { x1: cur.x, y1: cur.y, x2: node.x, y2: node.y, dx: node.x - cur.x, dy: node.y - cur.y };
+  const zi = clamp(Math.min(W, H) / 90, 3.5, 9); // deep: node fills the screen
+  flyTo(node.x, node.y, zi, 1400, () => {
+    G.traveler = null;
     enterScene(node);
-    codecSay({ name: 'SHIP COMPUTER', color: '#94a3b8', glyph: '⌬', text: crewEntry() });
-    setTimeout(() => {
-      codecClear();
-      beginEncounter(node);
-    }, 1400);
+    beginEncounter(node); // 5: no slop — codec opens only with the real event
   });
 }
-function crewEntry() {
-  const n = G.nodes.get(G.current);
-  const typeTxt = n.type === 'Station' ? 'Station on scopes.'
-    : n.type === 'Combat' ? 'Weapons hot.'
-    : n.type === 'Distress' ? 'Beacon ahead.'
-    : n.type === 'DarkRift' ? 'Rift interference.'
-    : n.type === 'Anomaly' ? 'Sensor ghost.'
-    : n.type === 'CelestialSite' ? 'Ruins ahead.'
-    : n.type === 'AetheriumField' ? 'Mineral readings.'
-    : 'Open space.';
-  return `Jump ${G.jumps}. ${typeTxt}`;
+
+// 4: every node = its own environment, drawn dense at scene scale
+const ENV = {
+  Nebula: (ctx, t) => {
+    for (let i = 0; i < 6; i++) {
+      const h1 = hash2(7, i, 1), h2 = hash2(7, i, 2);
+      const r = 28 + h1 * 30, ox = (h1 - 0.5) * 160, oy = (h2 - 0.5) * 140;
+      const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, r);
+      g.addColorStop(0, i % 2 ? 'rgba(129,140,248,0.14)' : 'rgba(216,180,254,0.12)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(ox, oy + Math.sin(t * 0.6 + i) * 4, r, 0, TAU); ctx.fill();
+    }
+  },
+  AsteroidField: (ctx) => {
+    for (let i = 0; i < 14; i++) {
+      const h1 = hash2(3, i, 3), h2 = hash2(3, i, 4);
+      const rx = (h1 - 0.5) * 190, ry = (h2 - 0.5) * 160, rr = (2 + h1 * 5);
+      poly([rx + rr, ry, rx + rr * 0.4, ry - rr * 0.8, rx - rr * 0.7, ry - rr * 0.2, rx - rr * 0.5, ry + rr * 0.6], '#1f2937', '#334155');
+    }
+  },
+  Station: (ctx, t) => {
+    ctx.strokeStyle = 'rgba(251,191,36,0.12)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.arc(0, 0, 60 + i * 30, 0, TAU); ctx.stroke(); }
+    for (let i = 0; i < 6; i++) { // cargo specks drifting
+      const an = hash2(9, i, 5) * TAU + t * 0.05;
+      ctx.fillStyle = 'rgba(148,163,184,0.5)';
+      ctx.fillRect(Math.cos(an) * (70 + i * 14), Math.sin(an) * (70 + i * 14), 1.4, 1.4);
+    }
+  },
+  Combat: (ctx, t) => {
+    for (let i = 0; i < 8; i++) { // wreck shards + drifting sparks
+      const h1 = hash2(11, i, 6), h2 = hash2(11, i, 7);
+      const rx = (h1 - 0.5) * 180, ry = (h2 - 0.5) * 150;
+      poly([rx + 6, ry, rx, ry - 4, rx - 7, ry + 3], '#111827', '#374151');
+    }
+    if (Math.sin(t * 5) > 0.6) {
+      ctx.fillStyle = 'rgba(248,113,113,0.6)';
+      ctx.fillRect((hash2(2, 2, 8) - 0.5) * 120, (hash2(2, 3, 8) - 0.5) * 100, 2, 2);
+    }
+  },
+  Distress: (ctx, t) => {
+    const p = (t * 0.5) % 1;
+    ctx.strokeStyle = `rgba(251,146,60,${0.5 * (1 - p)})`; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(30, -20, 10 + p * 70, 0, TAU); ctx.stroke();
+  },
+  DarkRift: (ctx, t) => {
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 90);
+    g.addColorStop(0, 'rgba(0,0,0,0.85)');
+    g.addColorStop(0.6, 'rgba(20,5,40,0.5)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 90, 0, TAU); ctx.fill();
+    for (let i = 0; i < 6; i++) { // particles sucked inward
+      const an = hash2(5, i, 9) * TAU - t * 0.8, rr = 30 + (hash2(5, i, 10) * 60 * (0.5 + 0.5 * Math.sin(t + i)));
+      ctx.fillStyle = 'rgba(232,121,249,0.5)';
+      ctx.fillRect(Math.cos(an) * rr, Math.sin(an) * rr, 1.5, 1.5);
+    }
+  },
+  CelestialSite: (ctx, t) => {
+    for (let i = 0; i < 10; i++) {
+      const h1 = hash2(13, i, 11), h2 = hash2(13, i, 12);
+      const blink = 0.3 + 0.7 * Math.abs(Math.sin(t * 1.5 + i));
+      ctx.fillStyle = `rgba(251,191,36,${0.5 * blink})`;
+      ctx.beginPath(); ctx.arc((h1 - 0.5) * 170, (h2 - 0.5) * 140, 0.8, 0, TAU); ctx.fill();
+    }
+  },
+  AetheriumField: (ctx, t) => {
+    for (let i = 0; i < 8; i++) {
+      const h1 = hash2(17, i, 13), h2 = hash2(17, i, 14);
+      const rx = (h1 - 0.5) * 180, ry = (h2 - 0.5) * 150, rr = 3 + h1 * 6;
+      ctx.fillStyle = `rgba(34,211,238,${0.25 + 0.15 * Math.sin(t * 2 + i)})`;
+      poly([rx, ry - rr, rx + rr * 0.7, ry, rx, ry + rr, rx - rr * 0.7, ry], ctx.fillStyle);
+    }
+  },
+  Empty: (ctx) => {
+    for (let i = 0; i < 12; i++) {
+      const h1 = hash2(23, i, 15), h2 = hash2(23, i, 16);
+      ctx.fillStyle = 'rgba(148,163,184,0.35)';
+      ctx.fillRect((h1 - 0.5) * 220, (h2 - 0.5) * 190, 1, 1);
+    }
+  },
+};
+function drawEnv(node, t) {
+  const env = ENV[node.type];
+  ctx.save();
+  ctx.translate(X_FX(node.x), Y_FX(node.y));
+  ctx.scale(G.cam.z, G.cam.z);
+  if (env) env(ctx, t);
+  ctx.restore();
 }
 
 function beginEncounter(node) {
@@ -703,9 +802,10 @@ function beginEncounter(node) {
   G.activeEvent = ev;
   G.outcome = null;
   G.encounters.add(node.id);
-  // stage procedural actors + opening codec
+  // 4: sector environment + procedural actors + opening codec
+  const sector = (SECTOR_STAGE[node.type] ? SECTOR_STAGE[node.type](node) : []);
   const actors = (SCENES[source] || (() => []))(node);
-  if (actors.length) G.scene.actors = G.scene.actors.concat(actors);
+  G.scene.actors = G.scene.actors.concat(sector, actors);
   const sp = SPEAKERS[source] || SPEAKERS.self;
   codecSay({ ...sp, text: ev.desc, choices: codecChoicesFor(ev) });
 }
@@ -835,8 +935,7 @@ function expandAround(id, avoidId) {
 function startRun(faction) {
   if (B) { clearInterval(B.timer); B = null; window.__sd.battle = null; }
   codecClear();
-  document.getElementById('s-actions').classList.add('hidden');
-  G.scene = null; G.camAnim = null;
+  G.scene = null; G.camAnim = null; G.traveler = null;
   G.faction = faction;
   G.rng = mulberry32((Math.random() * 0xFFFFFFFF) >>> 0);
   G.nodes.clear(); G.nextId = 1;
@@ -848,7 +947,7 @@ function startRun(faction) {
   G.ship = faction.id === 'spirats' ? { w1: 'laser', w2: 'missile' }
     : faction.id === 'webes' ? { w1: 'ion', w2: 'laser' } : { w1: 'laser', w2: 'laser' };
   G.activeEvent = null; G.outcome = null;
-  G.scene = null; G.camAnim = null; G.encounters = new Set();
+  G.scene = null; G.camAnim = null; G.traveler = null; G.encounters = new Set();
   const start = addNode('Station', 0, 0);
   G.nodes.get(start).visited = true;
   G.encounters.add(start);
@@ -1168,7 +1267,8 @@ function drawShipShape(a, t) {
   const c = a.color, dim = a.dead;
   ctx.save();
   ctx.translate(X_FX(a.x), Y_FX(a.y));
-  ctx.scale(G.cam.z, G.cam.z);
+  const s0 = G.cam.z * 0.16; // 3: ships scale to the environment, not the screen
+  ctx.scale(s0, s0);
   ctx.rotate(a.face || 0);
   ctx.globalAlpha = dim ? 0.35 : 1;
   const flick = 0.7 + 0.3 * Math.sin(t * 30 + a.seed);
@@ -1241,22 +1341,22 @@ function drawShipShape(a, t) {
   } else if (a.kind === 'rocks') {
     for (let i = 0; i < 5; i++) {
       const h1 = hash2(a.seed | 0, i, 5), h2 = hash2(a.seed | 0, i, 6);
-      const rx = (h1 - 0.5) * 130, ry = (h2 - 0.5) * 110, rr = 8 + h1 * 16;
+      const rx = (h1 - 0.5) * 60, ry = (h2 - 0.5) * 50, rr = 3 + h1 * 7;
       poly([rx + rr, ry, rx, ry - rr * 0.7, rx - rr, ry + rr * 0.4], '#334155', '#0f172a');
     }
   }
   ctx.restore();
-  // shield bubble + hit flash
+  // shield bubble + hit flash (fixed screen size)
   if (!dim && a.shieldFlash > 0) {
     ctx.globalAlpha = Math.min(1, a.shieldFlash) * 0.7;
     ctx.strokeStyle = '#7dd3fc'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(X_FX(a.x), Y_FX(a.y), 34 * G.cam.z, 0, TAU); ctx.stroke();
+    ctx.beginPath(); ctx.arc(X_FX(a.x), Y_FX(a.y), 42, 0, TAU); ctx.stroke();
     ctx.globalAlpha = 1;
   }
   if (!dim && a.hitFlash > 0) {
     ctx.globalAlpha = Math.min(1, a.hitFlash) * 0.6;
     ctx.fillStyle = '#fff';
-    ctx.beginPath(); ctx.arc(X_FX(a.x), Y_FX(a.y), 26 * G.cam.z, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(X_FX(a.x), Y_FX(a.y), 30, 0, TAU); ctx.fill();
     ctx.globalAlpha = 1;
   }
 }
@@ -1268,17 +1368,17 @@ function drawActorBar(a) {
   if (!a.hp || a.dead) return;
   const s = a.hp, w = 64;
   const pct = Math.max(0, s.hull / s.maxHull);
-  const ax = X_FX(a.x), ay = Y_FX(a.y);
+  const ax = X_FX(a.x), ay = Y_FX(a.y); // fixed screen offsets, scene-independent
   ctx.fillStyle = 'rgba(2,6,16,0.8)';
-  ctx.fillRect(ax - w / 2, ay - 46 * G.cam.z, w, 7);
+  ctx.fillRect(ax - w / 2, ay - 46, w, 7);
   ctx.fillStyle = a.foe ? '#f87171' : '#22d3ee';
-  ctx.fillRect(ax - w / 2 + 1, ay - 45 * G.cam.z, w * pct - 2, 5);
+  ctx.fillRect(ax - w / 2 + 1, ay - 45, w * pct - 2, 5);
   ctx.fillStyle = '#7dd3fc';
-  for (let i = 0; i < s.sh; i++) ctx.fillRect(ax - w / 2 + i * 8, ay - 54 * G.cam.z, 6, 4);
+  for (let i = 0; i < s.sh; i++) ctx.fillRect(ax - w / 2 + i * 8, ay - 54, 6, 4);
   if (a.crewLine) {
     ctx.fillStyle = 'rgba(148,163,184,0.9)';
     ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(a.crewLine, ax, ay + 42 * G.cam.z);
+    ctx.fillText(a.crewLine, ax, ay + 42);
   }
 }
 // crew dots moving inside your hull (visual echo of crewAI stations)
@@ -1292,7 +1392,7 @@ function drawCrewDots(a, t) {
     c.dx = (c.dx ?? p[0]) + (p[0] - (c.dx ?? p[0])) * 0.06;
     c.dy = (c.dy ?? p[1]) + (p[1] - (c.dy ?? p[1])) * 0.06;
     ctx.fillStyle = TH.acc;
-    ctx.beginPath(); ctx.arc(X_FX(a.x + c.dx * flip), Y_FX(a.y + c.dy), 2.6 * G.cam.z, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(X_FX(a.x) + c.dx * flip * 1.6, Y_FX(a.y) + c.dy * 1.6, 3, 0, TAU); ctx.fill();
   }
 }
 // fx: shots, bursts, floating text
@@ -1355,7 +1455,7 @@ function drawFx() {
   for (const p of S.parts) {
     ctx.globalAlpha = 1 - p.t / p.life;
     ctx.fillStyle = p.color;
-    ctx.fillRect(X_FX(p.x), Y_FX(p.y), p.size * G.cam.z, p.size * G.cam.z);
+    ctx.fillRect(X_FX(p.x), Y_FX(p.y), p.size, p.size);
   }
   ctx.globalAlpha = 1;
   ctx.textAlign = 'center'; ctx.font = 'bold 13px sans-serif';
@@ -1378,7 +1478,9 @@ function draw() {
   const { x: cx, y: cy, z } = G.cam;
   const X = wx => (wx - cx) * z + W / 2;
   const Y = wy => (wy - cy) * z + H / 2;
+  const inScene = !!G.scene; // map UI (labels, dots, links) sleeps during a scene
   // links (frustum-culled: skip when both ends are off-screen)
+  if (!inScene)
   for (const n of G.nodes.values()) {
     for (const l of n.links) {
       if (l < n.id) continue;
@@ -1395,6 +1497,7 @@ function draw() {
   }
   // nodes
   const cur = G.nodes.get(G.current);
+  if (!inScene)
   for (const n of G.nodes.values()) {
     const st = SECTOR_STYLE[n.type];
     const x = X(n.x), y = Y(n.y);
@@ -1427,13 +1530,26 @@ function draw() {
     }
   }
   // current pulse
-  if (cur) {
+  if (cur && !inScene) {
     const p = (performance.now() / 900) % 1;
     ctx.strokeStyle = hexA(TH.green, 0.6 * (1 - p));
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(X(cur.x), Y(cur.y), 24 + p * 22, 0, TAU); ctx.stroke();
   }
-  if (G.scene) drawFx();
+  // 2: ship visibly rides the link line into the node while the camera dives
+  if (G.traveler && G.camAnim) {
+    const t0 = G.camAnim.t0, dur = G.camAnim.dur;
+    let k = Math.min(1, (performance.now() - t0) / dur);
+    k = k * k * k * (k * (k * 6 - 15) + 10);
+    const tx = G.traveler.x1 + (G.traveler.x2 - G.traveler.x1) * k;
+    const ty = G.traveler.y1 + (G.traveler.y2 - G.traveler.y1) * k;
+    const sav = X_FX, savy = Y_FX;
+    X_FX = X; Y_FX = Y;
+    drawShipShape({ kind: 'player', x: tx, y: ty, face: Math.atan2(G.traveler.dy ?? 0, G.traveler.dx ?? 0) || 0, color: '#22d3ee', seed: 0 }, t);
+    // face along travel direction
+    X_FX = sav; Y_FX = savy;
+  }
+  if (G.scene) { const scn = G.nodes.get(G.scene.nodeId); if (scn) drawEnv(scn, t); drawFx(); }
   X_FX = x => x; Y_FX = y => y;
 }
 
