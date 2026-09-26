@@ -226,6 +226,7 @@ function startBattle(who, foeKey, stance) {
     weapons: playerLoadout(G.faction.id), crew: 2,
   });
   player.maxHull = G.maxHull;
+  player.autofire = true; // toggle: off = hold charge, click your ship to fire the volley
   const enemy = mkShip('foe', foe);
   const scale = 1 + dangerOf(G.nodes.get(G.current)) * 0.06;
   enemy.hull = enemy.maxHull = Math.round(enemy.hull * scale);
@@ -280,11 +281,12 @@ function battleTick() {
       if (w.ammoLeft === 0) continue;
       w.charge += chargeRate(ship);
       if (w.charge >= w.cd) {
+        const foe = ship.side === 'player' ? B.enemy : B.player;
+        if (ship.side === 'player' && !B.player.autofire) { w.charge = w.cd; continue; } // hold at full, fire manually
         w.charge = 0;
         if (w.ammoLeft != null) w.ammoLeft--;
-        const foe = ship.side === 'player' ? B.enemy : B.player;
-        if (ship.side === 'player' && !B.player.autofireOff) fireWeapon(ship, w, foe, ship.target);
-        else if (ship.side === 'foe') {
+        if (ship.side === 'player') fireWeapon(ship, w, foe, ship.target);
+        else {
           if (B.parleyTicks > 0) { w.charge = w.cd; continue; } // holding fire during parley
           fireWeapon(ship, w, foe, ['weapons', 'engines', 'shields'][Math.floor(Math.random() * 3)]);
         }
@@ -313,11 +315,8 @@ function battleTick() {
   paintBattle();
 }
 function fireWeapon(ship, w, foe, targetSys) {
-  const S = G.scene;
   const A = ship.actor, Ta = shieldVisualFor(foe);
-  if (A && Ta && Ta.kind !== 'player') {
-    spawnShot(A, Ta, w.color, w.key === 'missile' ? 5 : 3);
-  }
+  if (A && Ta) spawnShot(A, Ta, w.color, w.key === 'missile' ? 5 : 3); // both sides, visible
   const evade = foe.sys.engines >= 2 && Math.random() < 0.2;
   if (evade || Math.random() > 0.85) {
     if (A && Ta) floatText(Ta.x, Ta.y - 30, 'MISS', '#94a3b8');
@@ -327,12 +326,14 @@ function fireWeapon(ship, w, foe, targetSys) {
   let dmg = w.dmg, sysDmg = w.sys;
   if (foe.sh > 0 && dmg > 0) {
     foe.sh--; dmg--;
+    G.shake = Math.min(10, (G.shake || 0) + 4);
     if (Ta) { Ta.shieldFlash = 1; }
     if (Ta) floatText(Ta.x, Ta.y - 30, 'SHIELD', '#7dd3fc');
     if (dmg <= 0 && w.key !== 'missile') return;
   }
   if (dmg > 0) {
     foe.hull -= dmg;
+    G.shake = Math.min(14, (G.shake || 0) + (foe.side === 'player' ? 9 : 5)); // heavy feedback both ways
     if (Ta) { Ta.hitFlash = 1; burst(Ta.x, Ta.y, w.key === 'missile' ? '#fb923c' : '#f87171', w.key === 'missile' ? 22 : 12); }
     if (Ta) floatText(Ta.x, Ta.y - 30, `-${dmg}`, '#f87171');
     if (w.key !== 'ion' && Math.random() < 0.65 && Ta) burst(Ta.x, Ta.y, '#fbbf24', 6); // sparks
@@ -434,6 +435,29 @@ function bTarget() {
   blog(`🎯 Targeting ${SYS_LABEL[B.player.target]}.`);
   paintBattle();
 }
+// toggle autofire: off = weapons hold at full charge; click your ship again to fire the volley
+function bAuto() {
+  if (!B || B.over) return;
+  B.player.autofire = !B.player.autofire;
+  const me = G.scene ? G.scene.player : null;
+  if (B.player.autofire) {
+    if (me) floatText(me.x, me.y - 40, 'AUTO-FIRE ON', '#22d3ee');
+  } else {
+    // fire whatever is already charged, then hold
+    let fired = 0;
+    for (const w of B.player.weapons) {
+      if (w.charge >= w.cd && w.ammoLeft !== 0) {
+        w.charge = 0;
+        if (w.ammoLeft != null) w.ammoLeft--;
+        fireWeapon(B.player, w, B.enemy, B.player.target);
+        if (!B || B.over) return;
+        fired++;
+      }
+    }
+    if (me) floatText(me.x, me.y - 40, fired ? 'VOLLEY!' : 'MANUAL FIRE', '#fcd34d');
+  }
+  paintBattle();
+}
 function bPause() {
   if (!B || B.over) return;
   B.paused = !B.paused;
@@ -455,12 +479,12 @@ function bFlee() {
 }
 function bTalk(mode) {
   if (!B || B.over) return;
-  B.player.autofireOff = mode === 'talk' ? true : B.player.autofireOff;
+  B.player.autofire = mode === 'talk' ? false : B.player.autofire; // hold fire while talking
   if (mode === 'talk') {
     B.stance = 'parley'; B.parleyTicks = Math.max(B.parleyTicks, 6);
     blog(`📻 You open a channel. Demand tribute, pay ${B.tribute} scrap, or open fire.`);
   } else if (mode === 'fire') {
-    B.player.autofireOff = false; B.stance = 'hostile'; B.parleyTicks = 0;
+    B.player.autofire = true; B.stance = 'hostile'; B.parleyTicks = 0;
     blog('🔥 Weapons free!');
   } else if (mode === 'pay') {
     if (G.scrap < B.tribute) { blog('❌ Not enough scrap.'); paintBattle(); return; }
@@ -505,8 +529,9 @@ function battlePhase() {
 function paintBattle() {
   if (!B) return;
   const phase = battlePhase();
-  if (phase === B.uiPhase) { battleStatusLine(); return; } // buttons stable; refresh text only
-  B.uiPhase = phase;
+  const uiKey = phase + '|' + (B.player.autofire ? 'auto' : 'man');
+  if (uiKey === B.uiPhase) { battleStatusLine(); return; } // buttons stable; refresh text only
+  B.uiPhase = uiKey;
   const foeSp = B.who === 'pirates' || B.who === 'trap' ? SPEAKERS.pirate
     : B.who === 'patrol' ? SPEAKERS.patrol
     : { name: B.enemy.name, color: '#e879f9', glyph: '◮' };
@@ -523,9 +548,10 @@ function paintBattle() {
       { t: 'No mercy', fn: () => bTalk('refuse') },
     ] });
   } else {
-    // 5: real orders, no cryptic cycle button — click the enemy ship to refocus
-    codecSay({ ...SPEAKERS.self, text: battleStatusText() + ' — 🎯 click enemy ship to focus: ' + SYS_LABEL[B.player.target], choices: [
-      { t: '📻 Talk', fn: () => bTalk('talk') },
+    // real orders: fire control matters, click ships for target/volley
+    codecSay({ ...SPEAKERS.self, text: battleStatusText() + ' — 🎯 click enemy ship to refocus', choices: [
+      { t: B.player.autofire ? '⚙ AUTO-FIRE: ON' : '✋ MANUAL — click to FIRE', primary: !B.player.autofire, fn: () => bAuto() },
+      { t: `🎯 ${SYS_LABEL[B.player.target]}`, fn: () => bTarget() },
       { t: '💨 Flee', fn: () => bFlee() },
     ] });
   }
@@ -537,7 +563,7 @@ function battleStatusText() {
     const ammo = w.ammoLeft != null ? ` ×${w.ammoLeft}` : '';
     return `${w.name}${ammo} ${pct >= 100 ? 'READY' : pct + '%'}`;
   }).join(' · ');
-  return `⚙ auto · ${wps}`;
+  return `${B.player.autofire ? '⚙ auto' : '✋ manual'} · ${wps}`;
 }
 function battleStatusLine() {
   const el = document.getElementById('codec-text');
@@ -853,6 +879,8 @@ const G = {
   best: +(localStorage.getItem('sd-best') || 0),
   rng: mulberry32(1),
   mouse: { x: 0.5, y: 0.5 }, // normalized hover, far-layer drift
+  shake: 0, // screenshake magnitude
+  hoverId: 0, // node under the cursor (map tooltip)
 };
 
 function sectorType(rng, distance) {
@@ -1067,11 +1095,25 @@ function gameOver(reason) {
 // ---------- hud ----------
 function hideModal() { modalEl.classList.add('hidden'); }
 function paintHUD() {
+  const hullPct = Math.round(100 * G.hull / G.maxHull);
+  const fuelPct = Math.round(100 * G.fuel / 100);
   hudEl.innerHTML =
-    `<span class="hud-chip" style="color:${G.faction.color}">⬢ ${G.faction.name}</span>` +
-    `<span class="hud-chip">⛽ <b>${Math.floor(G.fuel)}</b></span>` +
+    `<div class="hud-group">` +
+      `<span class="hud-chip" style="color:${G.faction.color}">⬢ ${G.faction.name}</span>` +
+    `</div>` +
+    `<div class="hud-group">` +
+      `<div class="hud-bar-container" title="HULL: ${Math.ceil(G.hull)}/${G.maxHull}">` +
+        `<span class="hud-bar-label">HULL</span>` +
+        `<div class="hud-bar"><i style="width:${hullPct}%; background: var(--green);"></i></div>` +
+        `<span class="hud-bar-val">${Math.ceil(G.hull)}</span>` +
+      `</div>` +
+      `<div class="hud-bar-container" title="FUEL: ${Math.floor(G.fuel)}">` +
+        `<span class="hud-bar-label">FUEL</span>` +
+        `<div class="hud-bar"><i style="width:${Math.min(100, fuelPct)}%; background: var(--accent);"></i></div>` +
+        `<span class="hud-bar-val">${Math.floor(G.fuel)}</span>` +
+      `</div>` +
+    `</div>` +
     `<span class="hud-chip">⛁ <b>${G.scrap}</b></span>` +
-    `<span class="hud-chip">🛡 <b>${Math.ceil(G.hull)}</b></span>` +
     `<span class="spacer"></span>` +
     `<span class="hud-chip">J${G.jumps} · BEST ${G.best}</span>`;
 }
@@ -1099,7 +1141,8 @@ function hash2(x, y, salt) {
   return h / 0xFFFFFFFF;
 }
 function drawStars(t) {
-  const { x: cx, y: cy, z } = G.cam;
+  const { x: cx, y: cy, z: realZ } = G.cam;
+  const z = Math.min(1.6, 1 + (realZ - 1) * 0.12); // background parallax cap: never goes blank
   for (let li = 0; li < LAYERS.length; li++) {
     const L = LAYERS[li];
     // hover drift: far layers breathe with the pointer (±14px on the farthest)
@@ -1149,7 +1192,8 @@ function drawNebulas(t) {
       { img: makeNebula('rgba(34,150,180,0.13)'), s: 520 },                 // teal
       { img: makeNebula('rgba(150,90,220,0.11)'), s: 720 });                // violet
   }
-  const { x: cx, y: cy, z } = G.cam;
+  const { x: cx, y: cy, z: realZ } = G.cam;
+  const z = Math.min(1.5, 1 + (realZ - 1) * 0.1); // background cap
   const f = 0.25, cell = 950;
   const vx0 = cx * f - W / 2 / z - cell, vx1 = cx * f + W / 2 / z + cell;
   const vy0 = cy * f - H / 2 / z - cell, vy1 = cy * f + H / 2 / z + cell;
@@ -1198,6 +1242,16 @@ canvas.addEventListener('pointerdown', e => {
 });
 window.addEventListener('pointermove', e => {
   if (e.pointerType !== 'touch') { G.mouse.x = e.clientX / W; G.mouse.y = e.clientY / H; }
+  // tactical hover: which node is under the cursor (map view only)
+  if (!G.scene && !G.camAnim && G.screen === 'play') {
+    const w = toWorld(e.clientX, e.clientY);
+    let best = 0, bd = (46 / G.cam.z) ** 2;
+    for (const n of G.nodes.values()) {
+      const d = (n.x - w.x) ** 2 + (n.y - w.y) ** 2;
+      if (d < bd) { bd = d; best = n.id; }
+    }
+    G.hoverId = best;
+  } else G.hoverId = 0;
   if (!drag.on || G.scene || G.camAnim) return;
   const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
   if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
@@ -1208,14 +1262,17 @@ window.addEventListener('pointerup', e => {
   if (!drag.on) return;
   drag.on = false;
   if (drag.moved || G.screen !== 'play' || G.activeEvent || G.scene || G.camAnim || B) {
-    // 4: during a fight, clicking the enemy ship cycles your target system
+    // during a fight: click the enemy ship to refocus, click your ship to toggle autofire/fire volley
     if (B && !B.over && G.scene && !drag.moved) {
-      const fa = G.scene.actors.find(a => a.hp === B.enemy);
-      if (fa) {
-        const sx = e.clientX, sy = e.clientY;
-        const fx = (fa.x - G.cam.x) * G.cam.z + W / 2, fy = (fa.y - G.cam.y) * G.cam.z + H / 2;
-        if (Math.hypot(sx - fx, sy - fy) < 70) { bTarget(); floatText(fa.x, fa.y - 40, `TARGET: ${SYS_LABEL[B.player.target]}`, '#f87171'); }
+      const sx = e.clientX, sy = e.clientY;
+      const foeA = G.scene.actors.find(a => a.hp === B.enemy);
+      if (foeA) {
+        const fx = (foeA.x - G.cam.x) * G.cam.z + W / 2, fy = (foeA.y - G.cam.y) * G.cam.z + H / 2;
+        if (Math.hypot(sx - fx, sy - fy) < 70) { bTarget(); floatText(foeA.x, foeA.y - 40, `TARGET: ${SYS_LABEL[B.player.target]}`, '#f87171'); return; }
       }
+      const me = G.scene.player;
+      const mx = (me.x - G.cam.x) * G.cam.z + W / 2, my = (me.y - G.cam.y) * G.cam.z + H / 2;
+      if (Math.hypot(sx - mx, sy - my) < 70) { bAuto(); return; }
     }
     return;
   }
@@ -1506,8 +1563,12 @@ function drawFx() {
 
 // ---------- render ----------
 function draw() {
-  ctx.clearRect(0, 0, W, H);
+  ctx.clearRect(-60, -60, W + 120, H + 120);
   const t = performance.now() / 1000;
+  if (G.shake > 0.05) {
+    ctx.save();
+    ctx.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
+  }
   drawNebulas(t);
   drawStars(t);
   if (G.scene) { X_FX = wx => (wx - G.cam.x) * G.cam.z + W / 2; Y_FX = wy => (wy - G.cam.y) * G.cam.z + H / 2; }
@@ -1566,6 +1627,42 @@ function draw() {
       ctx.fillText(n.name, x, y + r + 14);
     }
   }
+  // tactical hover tooltip: danger + expected content before you spend fuel
+  if (G.hoverId && !inScene && z > 0.5) {
+    const n = G.nodes.get(G.hoverId);
+    if (n) {
+      const x = X(n.x), y = Y(n.y);
+      const st = SECTOR_STYLE[n.type];
+      const danger = dangerOf(n);
+      const known = n.visited || (cur && cur.links.includes(n.id));
+      const w = 170, h = known ? 66 : 40;
+      const bx = clamp(x + 26, 8, W - w - 8), by = clamp(y - h - 10, 8, H - h - 8);
+      ctx.fillStyle = 'rgba(2,6,16,0.92)';
+      ctx.strokeStyle = hexA(st.color, 0.7);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.rect(bx, by, w, h); ctx.fill(); ctx.stroke();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = TH.ink; ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.fillText(n.name, bx + 8, by + 17);
+      ctx.fillStyle = st.color; ctx.font = '10px system-ui, sans-serif';
+      ctx.fillText(n.type.toUpperCase(), bx + 8, by + 31);
+      if (known) {
+        ctx.fillStyle = TH.muted; ctx.font = '9px system-ui, sans-serif';
+        ctx.fillText('THREAT', bx + 8, by + 49);
+        for (let i = 0; i < 5; i++) {
+          const on = i < Math.ceil(danger / 2);
+          ctx.fillStyle = on ? (danger >= 6 ? '#f87171' : danger >= 4 ? '#fb923c' : '#fbbf24') : 'rgba(148,163,184,0.25)';
+          ctx.fillRect(bx + 54 + i * 15, by + 43, 12, 7);
+        }
+        ctx.fillStyle = TH.faint; ctx.font = '9px system-ui, sans-serif';
+        ctx.fillText(n.visited ? 'already charted' : '1 fuel to jump', bx + 8, by + 61);
+      } else {
+        ctx.fillStyle = TH.muted; ctx.font = '9px system-ui, sans-serif';
+        ctx.fillText('2 jumps away — reachable later', bx + 8, by + 48);
+      }
+      ctx.textAlign = 'center';
+    }
+  }
   // current pulse
   if (cur && !inScene) {
     const p = (performance.now() / 900) % 1;
@@ -1588,6 +1685,7 @@ function draw() {
   }
   if (G.scene) { const scn = G.nodes.get(G.scene.nodeId); if (scn) drawEnv(scn, t); drawFx(); }
   X_FX = x => x; Y_FX = y => y;
+  if (G.shake > 0.05) ctx.restore();
 }
 
 let last = 0;
@@ -1595,6 +1693,7 @@ function frame(ts) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (ts - last) / 1000);
   last = ts;
+  G.shake = Math.max(0, (G.shake || 0) - dt * 26); // screenshake decay
   stepCamAnim(ts);
   if (G.scene) stepFx(dt);
   draw();
@@ -1604,10 +1703,19 @@ function frame(ts) {
 const fdiv = document.getElementById('factions');
 for (const f of FACTIONS) {
   const b = document.createElement('button');
-  b.innerHTML = `<b style="color:${f.color}">${f.name}</b><span>${f.bonus}</span>`;
+  const guns = playerLoadout(f.id).map(k => WEAPONS[k].name).join(' · ');
+  b.innerHTML =
+    `<svg class="fship" viewBox="0 0 40 20" aria-hidden="true">` +
+      `<polygon points="36,10 12,2 18,10 12,18" fill="${f.color}" fill-opacity="0.28" stroke="${f.color}" stroke-width="1.2"/>` +
+      `<polygon points="20,10 12,7 12,13" fill="${f.color}"/>` +
+      `<polygon points="6,7 0,10 6,13" fill="${f.color}" fill-opacity="0.5"/>` +
+    `</svg>` +
+    `<b style="color:${f.color}">${f.name}</b>` +
+    `<span>${f.bonus}</span>` +
+    `<em class="farms">◂ ${guns}</em>`;
   b.addEventListener('click', () => startRun(f));
   fdiv.appendChild(b);
 }
 document.getElementById('again').addEventListener('click', () => startRun(G.faction));
-window.__sd = { G, travelTo, choose, startRun, startBattle, bTarget, bTalk, bFlee, bPause }; // test hook
+window.__sd = { G, travelTo, choose, startRun, startBattle, bTarget, bTalk, bFlee, bPause, bAuto }; // test hook
 requestAnimationFrame(frame);

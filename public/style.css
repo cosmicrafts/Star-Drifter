@@ -40,6 +40,9 @@ html, body {
 #factions button:hover { border-color: var(--accent); transform: translateY(-2px); }
 #factions button b { font-size: 12px; letter-spacing: 0.12em; }
 #factions button span { font-size: 10px; color: var(--muted); }
+.fship { width: 40px; height: 20px; display: block; margin: 0 auto 0.1rem; opacity: 0.75; transition: opacity 0.2s, transform 0.2s; }
+#factions button:hover .fship { opacity: 1; transform: translateX(4px) scale(1.15); }
+.farms { font-size: 9px; color: var(--faint); font-style: normal; letter-spacing: 0.08em; }
 
 #hud {
   position: absolute; top: 0; left: 0; right: 0; z-index: 4;
@@ -48,6 +51,19 @@ html, body {
   background: linear-gradient(var(--bg), transparent);
 }
 #hud .spacer { flex: 1; }
+
+/* hud bars */
+.hud-group { display: flex; gap: 0.6rem; align-items: center; }
+.hud-bar-container {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0.3rem 0.55rem; font-size: 11px; height: 30px;
+}
+.hud-bar-label { color: var(--muted); font-weight: 900; letter-spacing: 0.05em; font-size: 9px; }
+.hud-bar { width: 60px; height: 6px; background: var(--surface-1); border-radius: 3px; overflow: hidden; position: relative; }
+.hud-bar i { display: block; height: 100%; transition: width 0.3s ease; }
+.hud-bar-val { color: var(--ink); font-weight: 900; min-width: 18px; text-align: right; }
 
 #m-card {
   max-width: 30rem; width: calc(100% - 2rem);
