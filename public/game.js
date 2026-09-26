@@ -245,7 +245,7 @@ function startBattle(who, foeKey, stance) {
       const foekind = who === 'patrol' ? 'patrol' : who === 'combat' ? 'drone' : 'pirate';
       foeActor = mkActor(foekind, S.anchor.x + 44, S.anchor.y - 12, {
         color: who === 'patrol' ? '#a5b4fc' : who === 'combat' ? '#e879f9' : '#f0abfc',
-        face: Math.PI, // 1: enemies face you, not away
+        mirror: true, // faces you: mirrored, never upside-down
       });
       S.actors.push(foeActor);
     }
@@ -658,7 +658,7 @@ const SPEAKERS = {
 
 // ---------- procedural staging per node ----------
 function mkActor(kind, x, y, opts) {
-  const a = Object.assign({ kind, x, y, seed: Math.random() * TAU, face: kind === 'foe' ? Math.PI : 0 }, opts || {});
+  const a = Object.assign({ kind, x, y, seed: Math.random() * TAU, face: 0 }, opts || {});
   if (opts && opts.orb) { a.ax = x; a.ay = y; a.orbPh = Math.random() * TAU; a.orbSp = 0.25 + Math.random() * 0.2; }
   return a;
 }
@@ -673,7 +673,7 @@ const SCENES = {
   combat: (n, who) => {
     const col = who === 'pirates' ? '#f0abfc' : who === 'patrol' ? '#a5b4fc' : '#e879f9';
     const kind = who === 'pirates' ? 'pirate' : who === 'patrol' ? 'patrol' : 'drone';
-    const m = who === 'pirates' ? [mkActor(kind, n.x + 42, n.y - 16, { color: col, face: Math.PI }), mkActor(kind, n.x + 55, n.y + 20, { color: '#f0abfc', face: Math.PI })] : [mkActor(kind, n.x + 44, n.y - 12, { color: col, face: Math.PI })];
+    const m = who === 'pirates' ? [mkActor(kind, n.x + 42, n.y - 16, { color: col, mirror: true }), mkActor(kind, n.x + 55, n.y + 20, { color: '#f0abfc', mirror: true })] : [mkActor(kind, n.x + 44, n.y - 12, { color: col, mirror: true })];
     return m;
   },
   merchant: n => [mkActor('merchant', n.x + 44, n.y - 12, { color: '#fbbf24', orb: 5 })],
@@ -744,10 +744,17 @@ const ENV = {
     }
   },
   AsteroidField: (ctx) => {
+    // small drifting rock specks in the distance — rounded, low contrast
     for (let i = 0; i < 14; i++) {
       const h1 = hash2(3, i, 3), h2 = hash2(3, i, 4);
       const rx = (h1 - 0.5) * 190, ry = (h2 - 0.5) * 160, rr = (2 + h1 * 5);
-      poly([rx + rr, ry, rx + rr * 0.4, ry - rr * 0.8, rx - rr * 0.7, ry - rr * 0.2, rx - rr * 0.5, ry + rr * 0.6], '#1f2937', '#334155');
+      const pts = [];
+      for (let v = 0; v < 8; v++) {
+        const an = (v / 8) * TAU;
+        const wob = 0.7 + 0.4 * hash2(i, v, 9);
+        pts.push(rx + Math.cos(an) * rr * wob, ry + Math.sin(an) * rr * wob);
+      }
+      poly(pts, 'rgba(38,48,61,0.85)', null);
     }
   },
   Station: (ctx, t) => {
@@ -760,10 +767,17 @@ const ENV = {
     }
   },
   Combat: (ctx, t) => {
-    for (let i = 0; i < 8; i++) { // wreck shards + drifting sparks
+    for (let i = 0; i < 8; i++) { // wreck debris plates floating in the battlefield
       const h1 = hash2(11, i, 6), h2 = hash2(11, i, 7);
       const rx = (h1 - 0.5) * 180, ry = (h2 - 0.5) * 150;
-      poly([rx + 6, ry, rx, ry - 4, rx - 7, ry + 3], '#111827', '#374151');
+      const rr = 3 + h1 * 5;
+      const pts = [];
+      for (let v = 0; v < 7; v++) {
+        const an = (v / 7) * TAU;
+        const wob = 0.6 + 0.5 * hash2(i, v, 11);
+        pts.push(rx + Math.cos(an) * rr * wob, ry + Math.sin(an) * rr * wob);
+      }
+      poly(pts, 'rgba(17,24,39,0.9)', 'rgba(55,65,81,0.7)');
     }
     if (Math.sin(t * 5) > 0.6) {
       ctx.fillStyle = 'rgba(248,113,113,0.6)';
@@ -796,11 +810,14 @@ const ENV = {
     }
   },
   AetheriumField: (ctx, t) => {
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 8; i++) { // crystal clusters with glow
       const h1 = hash2(17, i, 13), h2 = hash2(17, i, 14);
       const rx = (h1 - 0.5) * 180, ry = (h2 - 0.5) * 150, rr = 3 + h1 * 6;
-      ctx.fillStyle = `rgba(34,211,238,${0.25 + 0.15 * Math.sin(t * 2 + i)})`;
-      poly([rx, ry - rr, rx + rr * 0.7, ry, rx, ry + rr, rx - rr * 0.7, ry], ctx.fillStyle);
+      const a = 0.25 + 0.15 * Math.sin(t * 2 + i);
+      ctx.fillStyle = `rgba(34,211,238,${a * 0.35})`;
+      ctx.beginPath(); ctx.arc(rx, ry, rr * 2.4, 0, TAU); ctx.fill();
+      ctx.fillStyle = `rgba(165,243,252,${a + 0.3})`;
+      poly([rx, ry - rr, rx + rr * 0.5, ry, rx, ry + rr, rx - rr * 0.5, ry], ctx.fillStyle);
     }
   },
   Empty: (ctx) => {
@@ -1336,49 +1353,79 @@ function drawShipShape(a, t) {
   const c = a.color, dim = a.dead;
   ctx.save();
   ctx.translate(X_FX(a.x), Y_FX(a.y));
-  const s0 = G.cam.z * 0.16; // 3: ships scale to the environment, not the screen
+  const s0 = G.cam.z * 0.16; // ships scale to the environment, not the screen
   ctx.scale(s0, s0);
   ctx.rotate(a.face || 0);
+  if (a.mirror) ctx.scale(-1, 1); // mirror horizontally — never rotated upside-down
   ctx.globalAlpha = dim ? 0.35 : 1;
   const flick = 0.7 + 0.3 * Math.sin(t * 30 + a.seed);
   if (a.kind === 'player') {
-    poly([20, 0, -12, -11, -5, 0, -12, 11], shade(c, dim), TH.ink);
-    poly([8, 0, -4, -4, -4, 4], hexA(c, 0.9));
-    ctx.fillStyle = `rgba(125,211,252,${0.5 * flick})`; // engine
-    poly([-12, -4, -19 - 4 * flick, 0, -12, 4], `rgba(125,211,252,${0.5 * flick})`);
+    // swept-wing fighter: dart hull, canopy, twin wing plates, twin flames
+    poly([-6, -5, -3, -15, 5, -6], hexA(c, 0.35), hexA(c, 0.7));   // upper wing
+    poly([-6, 5, -3, 15, 5, 6], hexA(c, 0.35), hexA(c, 0.7));    // lower wing
+    ctx.fillStyle = `rgba(125,211,252,${0.6 * flick})`;
+    poly([-15, -3, -26 - 6 * flick, 0, -15, 3], `rgba(125,211,252,${0.6 * flick})`);
+    poly([24, 0, 6, -7, -12, -7, -18, -3, -18, 3, -12, 7, 6, 7], shade(c, dim), TH.ink);
+    poly([12, 0, 2, -3, 2, 3], hexA('#e0f2fe', 0.95)); // canopy
   } else if (a.kind === 'pirate') {
-    poly([18, 0, 5, -13, -6, -6, -15, -11, -11, 0, -15, 11, -6, 6, 5, 13], shade(c, dim), TH.ink);
-    poly([4, 0, -6, -3, -6, 3], hexA('#f87171', 0.9));
-    ctx.fillStyle = `rgba(248,113,113,${0.5 * flick})`;
-    poly([-14, -3, -20 - 3 * flick, 0, -14, 3], `rgba(248,113,113,${0.5 * flick})`);
+    // barred raider: barbed hull, red core, ragged exhaust
+    poly([2, -6, -8, -16, -3, -4], hexA(c, 0.4), hexA(c, 0.75));
+    poly([2, 6, -8, 16, -3, 4], hexA(c, 0.4), hexA(c, 0.75));
+    ctx.fillStyle = `rgba(248,113,113,${0.55 * flick})`;
+    poly([-13, -3, -24 - 5 * flick, 0, -13, 3], `rgba(248,113,113,${0.55 * flick})`);
+    poly([24, 0, 6, -9, -4, -6, -2, 0, -4, 6, 6, 9], shade(c, dim), TH.ink);
+    poly([8, 0, -2, -4, -2, 4], hexA('#f87171', 0.95)); // red core
   } else if (a.kind === 'patrol') {
-    poly([20, 0, -13, -9, -6, 0, -13, 9], shade(c, dim), TH.ink);
-    ctx.fillStyle = hexA(c, 0.9);
-    ctx.fillRect(-2, -2, 8, 4);
-    ctx.fillStyle = `rgba(165,180,252,${0.5 * flick})`;
-    poly([-13, -3, -18 - 3 * flick, 0, -13, 3], `rgba(165,180,252,${0.5 * flick})`);
+    // blocky gunship: flat nose, side pods, calm exhaust
+    ctx.fillStyle = hexA(c, 0.32);
+    ctx.fillRect(-2, -12, 12, 5); ctx.fillRect(-2, 7, 12, 5); // pods
+    ctx.strokeStyle = hexA(c, 0.7); ctx.lineWidth = 1.2;
+    ctx.strokeRect(-2, -12, 12, 5); ctx.strokeRect(-2, 7, 12, 5);
+    ctx.fillStyle = `rgba(165,180,252,${0.45 * flick})`;
+    poly([-16, -4, -24 - 4 * flick, 0, -16, 4], `rgba(165,180,252,${0.45 * flick})`);
+    poly([22, -7, 25, -3, 25, 3, 22, 7, -14, 7, -16, 2, -16, -2, -14, -7], shade(c, dim), TH.ink);
+    ctx.fillStyle = hexA('#c7d2fe', 0.9);
+    ctx.fillRect(6, -2, 9, 4); // bridge lights
   } else if (a.kind === 'merchant') {
+    // rounded hauler with cargo pods
     ctx.fillStyle = shade(c, dim);
-    ctx.fillRect(-18, -9, 32, 18);
-    ctx.strokeStyle = TH.ink; ctx.lineWidth = 1.5; ctx.strokeRect(-18, -9, 32, 18);
-    ctx.fillStyle = hexA(c, 0.8);
-    ctx.beginPath(); ctx.arc(-22, -10, 6, 0, TAU); ctx.arc(-22, 10, 6, 0, TAU); ctx.fill();
-    ctx.fillStyle = `rgba(251,191,36,${0.4 * flick})`;
-    ctx.fillRect(-18, -2, -4 * flick - 2, 4);
+    ctx.beginPath();
+    ctx.moveTo(14, -10); ctx.lineTo(20, -6); ctx.lineTo(20, 6); ctx.lineTo(14, 10);
+    ctx.lineTo(-16, 10); ctx.lineTo(-20, 5); ctx.lineTo(-20, -5); ctx.lineTo(-16, -10);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = TH.ink; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = hexA(c, 0.85);
+    ctx.beginPath(); ctx.arc(-14, -12, 6, 0, TAU); ctx.arc(-14, 12, 6, 0, TAU); ctx.fill();
+    ctx.strokeStyle = hexA(c, 0.6); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(-14, -12, 6, 0, TAU); ctx.arc(-14, 12, 6, 0, TAU); ctx.stroke();
+    ctx.fillStyle = `rgba(251,191,36,${0.5 * flick})`;
+    poly([-20, -3, -27 - 5 * flick, 0, -20, 3], `rgba(251,191,36,${0.5 * flick})`);
   } else if (a.kind === 'drone') {
-    poly([10, 0, -8, -8, -8, 8], shade(c, dim), TH.ink);
-    ctx.fillStyle = hexA('#e879f9', 0.9);
-    ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, TAU); ctx.fill();
+    poly([12, 0, 2, -9, -9, 0, 2, 9], shade(c, dim), TH.ink);
+    ctx.strokeStyle = hexA('#e879f9', 0.8); ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(0, 0, 13, 0, TAU); ctx.stroke();
+    ctx.fillStyle = hexA('#e879f9', 0.95);
+    ctx.beginPath(); ctx.arc(0, 0, 3, 0, TAU); ctx.fill();
   } else if (a.kind === 'station') {
-    ctx.strokeStyle = hexA(c, dim ? 0.4 : 0.95); ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.arc(0, 0, 44, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = hexA(c, dim ? 0.4 : 0.5); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, 44, 0, TAU); ctx.stroke(); // outer habitat ring
+    ctx.strokeStyle = hexA(c, dim ? 0.3 : 0.9); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, 20, 0, TAU); ctx.stroke(); // core ring
     ctx.fillStyle = shade(c, dim);
-    ctx.fillRect(-12, -12, 24, 24);
-    ctx.strokeStyle = TH.ink; ctx.lineWidth = 1.5; ctx.strokeRect(-12, -12, 24, 24);
-    for (let i = 0; i < 4; i++) {
-      const an = t * 0.5 + a.seed + i * Math.PI / 2;
-      ctx.fillStyle = (Math.sin(t * 3 + i * 2) > 0) ? '#fbbf24' : hexA('#fbbf24', 0.2);
-      ctx.beginPath(); ctx.arc(Math.cos(an) * 44, Math.sin(an) * 44, 2.5, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, 12, 0, TAU); ctx.fill();
+    ctx.strokeStyle = TH.ink; ctx.lineWidth = 1.2; ctx.stroke();
+    for (let i = 0; i < 4; i++) { // spokes
+      const an = a.seed + i * Math.PI / 2;
+      ctx.strokeStyle = hexA(c, 0.55); ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(an) * 12, Math.sin(an) * 12);
+      ctx.lineTo(Math.cos(an) * 20, Math.sin(an) * 20);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 6; i++) { // ring windows
+      const an = t * 0.4 + a.seed + i * TAU / 6;
+      ctx.fillStyle = Math.sin(t * 3 + i * 2) > 0 ? '#fbbf24' : hexA('#fbbf24', 0.25);
+      ctx.beginPath(); ctx.arc(Math.cos(an) * 44, Math.sin(an) * 44, 2.4, 0, TAU); ctx.fill();
     }
   } else if (a.kind === 'derelict') {
     ctx.fillStyle = shade('#475569', true);
@@ -1408,10 +1455,25 @@ function drawShipShape(a, t) {
     ctx.beginPath(); ctx.ellipse(0, 0, 22, 52, 0, 0, TAU); ctx.stroke();
     ctx.restore();
   } else if (a.kind === 'rocks') {
-    for (let i = 0; i < 5; i++) {
+    // rounded asteroid blobs with a lit edge and craters — rocks, not triangles
+    for (let i = 0; i < 6; i++) {
       const h1 = hash2(a.seed | 0, i, 5), h2 = hash2(a.seed | 0, i, 6);
-      const rx = (h1 - 0.5) * 60, ry = (h2 - 0.5) * 50, rr = 3 + h1 * 7;
-      poly([rx + rr, ry, rx, ry - rr * 0.7, rx - rr, ry + rr * 0.4], '#334155', '#0f172a');
+      const cx0 = (h1 - 0.5) * 70, cy0 = (h2 - 0.5) * 56;
+      const rr = 6 + h1 * 12;
+      const verts = 9;
+      const pts = [];
+      for (let v = 0; v < verts; v++) {
+        const an = (v / verts) * TAU;
+        const wob = 0.75 + 0.35 * hash2((a.seed | 0) + i, v, 7);
+        pts.push(cx0 + Math.cos(an) * rr * wob, cy0 + Math.sin(an) * rr * wob);
+      }
+      poly(pts, '#26303d', null);
+      // lit rim toward the light source
+      ctx.strokeStyle = 'rgba(148,163,184,0.35)'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(cx0, cy0, rr * 0.82, Math.PI * 1.05, Math.PI * 1.85); ctx.stroke();
+      // crater
+      ctx.fillStyle = 'rgba(15,23,42,0.55)';
+      ctx.beginPath(); ctx.arc(cx0 + rr * 0.25, cy0 - rr * 0.2, rr * 0.28, 0, TAU); ctx.fill();
     }
   }
   ctx.restore();
@@ -1456,17 +1518,25 @@ function drawActorBar(a) {
       ctx.fillRect(bx, ay - 38, bw * pct, 3);
     }
   }
-  // 4: enemy systems clickable — labels under the foe, current target highlighted
+  // 4: enemy systems are clickable targets — labelled so it reads as a target row
   if (a.foe && window.__sd && window.__sd.battle && !window.__sd.battle.over) {
     const Bx = window.__sd.battle;
     const labels = ['weapons', 'engines', 'shields'];
-    ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    const rowY = ay + 52;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(248,113,113,0.85)';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillText('▼ TARGET', ax - 60, rowY);
+    ctx.font = '10px sans-serif';
     for (let i = 0; i < labels.length; i++) {
-      const lx = ax - 36 + i * 36;
+      const lx = ax - 8 + i * 34;
       const hot = Bx.player.target === labels[i];
-      ctx.fillStyle = hot ? '#f87171' : 'rgba(148,163,184,0.6)';
-      ctx.fillText((hot ? '▶' : '') + SYS_LABEL[labels[i]], lx, ay + 52);
-      if (hot) { ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(lx, ay + 40, 12, 0, TAU); ctx.stroke(); }
+      if (hot) { // reticle on the selected system only
+        ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(lx, rowY - 3, 13, 0, TAU); ctx.stroke();
+      }
+      ctx.fillStyle = hot ? '#f87171' : 'rgba(148,163,184,0.55)';
+      ctx.fillText(SYS_LABEL[labels[i]], lx, rowY + 1);
     }
   }
   if (a.crewLine) {
@@ -1479,7 +1549,7 @@ function drawActorBar(a) {
 const ROOM_PT = { weapons: [7, 0], engines: [-9, 0], shields: [0, -6], bridge: [0, 6] };
 function drawCrewDots(a, t) {
   if (!a.hp || !a.hp.crew || a.dead) return;
-  const flip = a.face ? -1 : 1;
+  const flip = a.mirror ? -1 : 1;
   for (let i = 0; i < a.hp.crew.length; i++) {
     const c = a.hp.crew[i];
     const p = ROOM_PT[c.station] || ROOM_PT.bridge;
