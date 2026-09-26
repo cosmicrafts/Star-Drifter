@@ -133,6 +133,20 @@ html, body {
 #b-log { flex-basis: 100%; max-height: 110px; overflow-y: auto; font-size: 11px; color: var(--muted);
   background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.4rem 0.5rem; }
 
+/* onboarding coach marks */
+#coach {
+  position: absolute; top: 116px; left: 50%; transform: translateX(-50%);
+  z-index: 8; width: min(440px, calc(100% - 2rem));
+  padding: 0.85rem 0.95rem; text-align: left; pointer-events: auto;
+  border-top: 2px solid var(--accent);
+}
+#coach .kicker { font-size: 10px; }
+#coach p { margin: 0.35rem 0 0; font-size: 13px; line-height: 1.5; color: var(--ink); }
+#coach .coach-actions { display: flex; gap: 0.4rem; margin-top: 0.65rem; align-items: center; }
+#coach .coach-actions .btn { padding: 0.45rem 0.85rem; font-size: 11px; }
+#coach .btn-skip { background: transparent; border-color: var(--line); color: var(--muted); }
+#coach .btn-skip:hover { color: var(--ink); }
+
 /* codec (MGS-style dialogue) */
 #codec {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;

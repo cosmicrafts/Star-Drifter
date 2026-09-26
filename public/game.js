@@ -220,6 +220,7 @@ function pickFoe(who, danger, rng) {
 }
 const TRIBUTE = { pirates: 8, patrol: 6, trap: 8, combat: 8 };
 function startBattle(who, foeKey, stance) {
+  if (G.tut.open) tutNext(); // combat tip takes over
   const foe = FOES[foeKey];
   const player = mkShip('player', {
     name: 'Your Ship', hull: G.hull, shield: 2,
@@ -656,6 +657,59 @@ const SPEAKERS = {
   self: { name: 'SHIP COMPUTER', color: '#94a3b8', glyph: '⌬' },
 };
 
+// ---------- onboarding: coach marks that run at the start of every run ----------
+// One box at a time, each step appears the first time its moment happens in a run.
+const coachEl = document.getElementById('coach');
+const TUT = [
+  { key: 'menu', when: () => G.screen === 'menu' && !B,
+    text: 'Pick a faction. Each one changes your bonus and your starting guns.' },
+  { key: 'map', when: () => G.screen === 'play' && !G.scene && !B,
+    text: 'These glowing nodes are your destinations. Drag to look around, wheel to zoom. Click one to jump — it costs 1 fuel.' },
+  { key: 'hud', when: () => G.screen === 'play' && !G.scene && !B,
+    text: 'HULL is your health. FUEL is how many jumps you have left. If either hits 0, the run ends.' },
+  { key: 'hover', when: () => G.screen === 'play' && !G.scene && !B && G.hoverId,
+    text: 'Hover a node to see the danger (THREAT) before you jump. Redder means more danger, but bigger rewards.' },
+  { key: 'station', when: () => G.activeEvent && !B && G.nodes.get(G.current) && G.nodes.get(G.current).type === 'Station',
+    text: 'Stations repair and refuel. Spend scrap here.' },
+  { key: 'event', when: () => G.activeEvent && !B,
+    text: 'Events give you choices. Click one or press 1-4. Greyed out means you cannot afford it. Every choice changes your resources.' },
+  { key: 'battle', when: () => B && !B.over,
+    text: 'AUTO-FIRE is on, your guns fire themselves. Click the enemy ship to pick what to hit (WPN/ENG/SHD), your ship to fire manually. 💨 flees.' },
+  { key: 'done', when: () => G.screen === 'play' && !G.scene && !B && G.encounters.size >= 2,
+    text: 'That is it. Get as far as you can — your best score is saved.' },
+];
+function tutShow(step) {
+  G.tut.open = step.key;
+  coachEl.innerHTML =
+    `<p class="kicker">[ TUTORIAL ]</p><p>${step.text}</p>` +
+    `<div class="coach-actions">` +
+      `<button class="btn btn-primary" id="coach-next">NEXT</button>` +
+      `<button class="btn btn-skip" id="coach-skip">SKIP TUTORIAL</button>` +
+    `</div>`;
+  document.getElementById('coach-next').addEventListener('click', tutNext);
+  document.getElementById('coach-skip').addEventListener('click', tutSkipRun);
+  coachEl.classList.remove('hidden');
+}
+function tutClose() {
+  G.tut.open = null;
+  coachEl.classList.add('hidden');
+  coachEl.innerHTML = '';
+}
+function tutNext() {
+  if (G.tut.open) G.tut.done.add(G.tut.open);
+  tutClose();
+}
+function tutSkipRun() {
+  G.tut.off = true;
+  for (const s of TUT) G.tut.done.add(s.key);
+  tutClose();
+}
+function tutTick() {
+  if (G.tut.off || G.tut.open) return;
+  const step = TUT.find(s => !G.tut.done.has(s.key) && s.when());
+  if (step) tutShow(step);
+}
+
 // ---------- procedural staging per node ----------
 function mkActor(kind, x, y, opts) {
   const a = Object.assign({ kind, x, y, seed: Math.random() * TAU, face: 0 }, opts || {});
@@ -714,6 +768,7 @@ function travelTo(id) {
     return;
   }
   G.fuel -= 1; G.jumps++;
+  if (G.tut.open) tutNext(); // the tip did its job; clear it so the next moment can speak
   const node = G.nodes.get(id);
   const first = !node.visited;
   node.visited = true;
@@ -838,6 +893,7 @@ function drawEnv(node, t) {
 }
 
 function beginEncounter(node) {
+  if (G.tut.open) tutNext(); // let the moment's tip through
   let key = SECTOR_EVENT[node.type];
   if (!key || G.rng() < 0.3) key = randomEvent(G.rng, dangerOf(node));
   const source = G.encounters.has(node.id) ? 'empty' : key;
@@ -898,6 +954,7 @@ const G = {
   mouse: { x: 0.5, y: 0.5 }, // normalized hover, far-layer drift
   shake: 0, // screenshake magnitude
   hoverId: 0, // node under the cursor (map tooltip)
+  tut: { off: false, done: new Set(), open: null }, // onboarding coach marks (reset per run)
 };
 
 function sectorType(rng, distance) {
@@ -994,6 +1051,8 @@ function startRun(faction) {
     : faction.id === 'webes' ? { w1: 'ion', w2: 'laser' } : { w1: 'laser', w2: 'laser' };
   G.activeEvent = null; G.outcome = null;
   G.scene = null; G.camAnim = null; G.traveler = null; G.encounters = new Set();
+  G.tut = { off: false, done: new Set(['menu']), open: null }; // fresh tutorial every run
+  tutClose();
   const start = addNode('Station', 0, 0);
   G.nodes.get(start).visited = true;
   G.encounters.add(start);
@@ -1028,6 +1087,7 @@ function dangerOf(node) {
 function choose(i) {
   const ev = G.activeEvent;
   if (!ev || !ev.choices || G.outcome) return;
+  if (G.tut.open) tutNext(); // the player acted on the tip
   const c = ev.choices[i];
   if (!c || !canPay(c.req || {})) return;
   // loot pickup (post-battle / tribute / surrender)
@@ -1100,6 +1160,7 @@ function closeEvent(outcomeText) {
 
 function gameOver(reason) {
   G.screen = 'over';
+  tutClose();
   hideModal();
   const score = G.jumps * 10 + G.scrap + G.kills * 5;
   if (score > G.best) { G.best = score; localStorage.setItem('sd-best', String(score)); }
@@ -1766,6 +1827,7 @@ function frame(ts) {
   G.shake = Math.max(0, (G.shake || 0) - dt * 26); // screenshake decay
   stepCamAnim(ts);
   if (G.scene) stepFx(dt);
+  tutTick();
   draw();
 }
 
@@ -1787,5 +1849,5 @@ for (const f of FACTIONS) {
   fdiv.appendChild(b);
 }
 document.getElementById('again').addEventListener('click', () => startRun(G.faction));
-window.__sd = { G, travelTo, choose, startRun, startBattle, bTarget, bTalk, bFlee, bPause, bAuto }; // test hook
+window.__sd = { G, travelTo, choose, startRun, startBattle, bTarget, bTalk, bFlee, bPause, bAuto, TUT, tutNext, tutSkipRun }; // test hook
 requestAnimationFrame(frame);
