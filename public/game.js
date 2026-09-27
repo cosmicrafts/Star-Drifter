@@ -219,7 +219,7 @@ function pickFoe(who, danger, rng) {
   return r < 0.6 ? 'scout' : r < 0.85 ? 'drone' : 'raider';
 }
 const TRIBUTE = { pirates: 8, patrol: 6, trap: 8, combat: 8 };
-function startBattle(who, foeKey, stance) {
+function startBattle(who, foeKey, stance, script) {
   const foe = FOES[foeKey];
   const player = mkShip('player', {
     name: 'Your Ship', hull: G.hull, shield: 2,
@@ -234,7 +234,14 @@ function startBattle(who, foeKey, stance) {
     who, foeKey, stance, over: false, paused: false, tick: 0,
     player, enemy, log: [], parleyTicks: stance === 'parley' ? 8 : 0,
     surrenderOffered: false, tribute: Math.max(4, Math.round((TRIBUTE[who] || 8) * (G.faction.id === 'spirats' && who === 'pirates' ? 0.5 : 1))),
+    script: script || null,
   };
+  if (script) { // scripted tutorial fight: fixed stats, fixed outcomes
+    if (script.hull) enemy.hull = enemy.maxHull = script.hull;
+    if (script.shield != null) enemy.sh = enemy.maxSh = script.shield;
+    if (script.weapons) enemy.weapons = script.weapons.map(mkWeapon);
+    if (script.parleyLong) B.parleyTicks = 20;
+  }
   // link actors: player ship + last foe actor get live hp bars
   const S = G.scene;
   if (S) {
@@ -297,9 +304,9 @@ function battleTick() {
   if (B.parleyTicks > 0) { B.parleyTicks--; if (B.parleyTicks === 0) blog('📻 Patience over. They charge weapons!'); }
   if (B.tick % 2 === 0) crewAI(B.player);
   if (B.tick % 2 === 0) crewAI(B.enemy);
-  // enemy morale: weak non-zealots surrender or flee
+  // enemy morale: weak non-zealots surrender or flee (scripted tutorial fights always finish)
   const foe = B.enemy;
-  if (!B.surrenderOffered && foe.hull <= foe.maxHull * 0.35 && foe.hull > 0) {
+  if (!B.surrenderOffered && !(B.script && B.script.noSurrender) && foe.hull <= foe.maxHull * 0.35 && foe.hull > 0) {
     B.surrenderOffered = true;
     if (B.stance !== 'hostile' || Math.random() < 0.5) {
       B.paused = true;
@@ -308,7 +315,7 @@ function battleTick() {
       return;
     }
   }
-  if (B.stance === 'hostile' && foe.hull <= foe.maxHull * 0.25 && foe.sys.engines > 0 && Math.random() < 0.2) {
+  if (B.stance === 'hostile' && !(B.script && B.script.noEscape) && foe.hull <= foe.maxHull * 0.25 && foe.sys.engines > 0 && Math.random() < 0.2) {
     blog(`💨 ${foe.name} jumps away!`);
     return endBattle('escaped');
   }
@@ -382,8 +389,8 @@ function endBattle(result) {
     if (foeActor) { foeActor.dead = true; burst(foeActor.x, foeActor.y, '#fb923c', 40); burst(foeActor.x, foeActor.y, '#f87171', 24); }
     floatText(foeActor ? foeActor.x : W / 2, foeActor ? foeActor.y : H / 2, 'DESTROYED', '#f87171');
     G.kills++;
-    const loot = lootFor(B.who);
-    const drop = Math.random() < 0.3 ? foe.weapons[Math.floor(Math.random() * foe.weapons.length)].key : null;
+    const loot = (B.script && B.script.loot) || lootFor(B.who);
+    const drop = (B.script && B.script.drop) || (Math.random() < 0.3 ? foe.weapons[Math.floor(Math.random() * foe.weapons.length)].key : null);
     const ev = {
       title: `${foe.name} Destroyed`,
       desc: `Salvage secured. +${loot[0]} fuel, +${loot[1]} scrap.${drop ? ` They carried a ${WEAPONS[drop].name}!` : ''}`,
@@ -393,6 +400,7 @@ function endBattle(result) {
         : [{ t: 'Collect salvage', req: {}, loot, out: [[`Salvage secured.`, loot]] }],
     };
     setTimeout(() => {
+      G.activeEvent = ev; // choose() needs it; loot codec is a real event now
       codecSay({ ...SPEAKERS.self, text: ev.desc, choices: codecChoicesFor(ev) });
     }, 900);
     paintHUD();
@@ -468,7 +476,7 @@ function bFlee() {
   if (!B || B.over || B.paused) return;
   const eng = B.player.sys.engines;
   if (eng <= 0) { blog('❌ Engines dead — cannot flee!'); paintBattle(); return; }
-  if (Math.random() < 0.55 + 0.1 * eng) {
+  if ((B.script && B.script.fleeSure) || Math.random() < 0.55 + 0.1 * eng) {
     blog('💨 Jump plotted — escaping!');
     endBattle('fled');
   } else {
@@ -494,12 +502,13 @@ function bTalk(mode) {
     return;
   } else if (mode === 'demand') {
     const intimidate = G.kills * 0.12 + (B.enemy.hull < B.enemy.maxHull * 0.6 ? 0.35 : 0);
-    if (Math.random() < 0.25 + intimidate) {
-      const loot = lootFor(B.who);
+    if ((B.script && B.script.demandSure) || Math.random() < 0.25 + intimidate) {
+      const loot = (B.script && B.script.loot) || lootFor(B.who);
       const ev = { title: 'Tribute Paid', desc: 'They hand over cargo and withdraw.', choices: [{ t: 'Take it', req: {}, loot, out: [['Tribute secured.', loot]] }] };
       B.over = true; clearInterval(B.timer);
       B = null; window.__sd.battle = null;
       paintHUD();
+      G.activeEvent = ev;
       codecSay({ ...SPEAKERS.pirate, text: ev.desc, choices: codecChoicesFor(ev) });
     } else {
       codecSay({ ...SPEAKERS.pirate, text: 'You dare? Weapons free!' });
@@ -507,11 +516,12 @@ function bTalk(mode) {
   } else if (mode === 'accept') {
     const loot = [Math.floor(B.enemy.maxHull / 6), Math.floor(B.enemy.maxHull / 2), 0];
     blog(`🏳️ Surrender accepted. +${loot[0]} fuel, +${loot[1]} scrap.`);
-    G.activeEvent = { key: '__loot', nodeId: G.current, ev: { title: 'Surrender Accepted', desc: 'They jettison cargo and limp away.', choices: [{ t: 'Take it', req: {}, loot, out: [['Cargo secured.', loot]] }] } };
+    const sd = { title: 'Surrender Accepted', desc: 'They jettison cargo and limp away.', choices: [{ t: 'Take it', req: {}, loot, out: [['Cargo secured.', loot]] }] };
+    G.activeEvent = sd;
     B.over = true; clearInterval(B.timer);
     B = null; window.__sd.battle = null;
     paintHUD();
-    codecSay({ ...SPEAKERS.self, text: ev.desc, choices: codecChoicesFor(ev) });
+    codecSay({ ...SPEAKERS.self, text: sd.desc, choices: codecChoicesFor(sd) });
   } else if (mode === 'refuse') {
     B.paused = false; B.stance = 'hostile';
     blog('🔥 No mercy. Finish them!');
@@ -691,39 +701,84 @@ function firstChoiceRect() {
   }
   return null;
 }
-function stationNow() {
-  const n = G.nodes.get(G.current);
-  return !!(n && n.type === 'Station');
+function choiceRect(txt) {
+  const els = document.querySelectorAll('#codec-choices .btn');
+  for (const el of els) {
+    if (el.classList.contains('locked')) continue;
+    if (txt && !el.textContent.includes(txt)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+  return null;
 }
+// ---------- scripted opening chain: every run teaches the same beats, in order ----------
+// 7 fixed nodes in a line; each forces its content (no RNG) so the finger can
+// walk the player through: trade -> fight -> repair -> negotiate -> break+flee -> refuel -> gamble.
+const CHAIN = [
+  { type: 'Empty', name: 'First Drift', ev: 'merchant', pick: 0 },
+  { type: 'Combat', name: 'Pirate Ambush', battle: { who: 'pirates', foe: 'scout', stance: 'hostile', hull: 14, shield: 0, weapons: ['laser'], loot: [3, 14, 0], drop: 'ion', noSurrender: true, noEscape: true } },
+  { type: 'Station', name: 'Repair Dock', ev: 'station', pick: 0 },
+  { type: 'Nebula', name: 'Silent Signal', battle: { who: 'patrol', foe: 'scout', stance: 'parley', hull: 16, shield: 1, weapons: ['laser'], parleyLong: true, demandSure: true, loot: [3, 10, 0] } },
+  { type: 'Combat', name: 'Drone Swarm', battle: { who: 'combat', foe: 'drone', stance: 'hostile', hull: 40, shield: 1, weapons: ['laser'], fleeSure: true } },
+  { type: 'Station', name: 'Fuel Depot', ev: 'station', pick: 0 },
+  { type: 'CelestialSite', name: 'Ancient Ruins', ev: 'celestial', pick: 0, last: true },
+];
+const CHAIN_DXY = [[240, -60], [230, 120], [250, -110], [230, 130], [250, -90], [230, 110], [250, -70]];
+const mapClear = () => G.screen === 'play' && !G.scene && !G.camAnim && !B && !G.activeEvent;
+const jumpStep = i => ({
+  key: 'j' + i, when: () => G.chain && G.chainStep === i && mapClear(),
+  label: () => 'Jump here · 1 fuel', pos: () => nodeScreen(G.chain[i]),
+  complete: () => !G.chain || G.chainStep > i,
+});
 const TUT = [
   { key: 'menu', when: () => G.screen === 'menu',
     label: () => 'Pick your ship', pos: () => rectCenter('#factions button', 0),
     complete: () => G.screen === 'play' },
-  { key: 'jump', when: () => G.screen === 'play' && !G.scene && !B,
-    label: () => 'Jump here · 1 fuel', pos: () => nodeScreen(G.tut.jumpNode),
-    setup: () => {
-      G.tut.snapJumps = G.jumps;
-      const cur = G.nodes.get(G.current);
-      let best = 0, bd = Infinity;
-      for (const l of cur.links) {
-        const n = G.nodes.get(l);
-        const d = (n.x - cur.x) ** 2 + (n.y - cur.y) ** 2;
-        if (d < bd) { bd = d; best = l; }
-      }
-      G.tut.jumpNode = best;
-    },
-    complete: () => G.jumps > (G.tut.snapJumps || 0) },
-  { key: 'event', when: () => G.activeEvent && !B,
-    label: () => stationNow() ? 'Fix + refuel here' : 'Pick one', pos: () => firstChoiceRect(),
+  jumpStep(0),
+  { key: 'e-trade', when: () => G.chain && G.chainStep === 1 && G.activeEvent && !B,
+    label: () => 'Trade fuel here', pos: () => choiceRect('Trade 10'),
     complete: () => !G.activeEvent },
-  { key: 'aim', when: () => B && !B.over,
+  jumpStep(1),
+  { key: 'b1-aim', when: () => G.chain && G.chainStep === 2 && B && !B.over,
     label: () => 'Tap enemy: aim', pos: () => actorScreen(foeActor()),
     setup: () => { G.tut.snapTarget = B.player.target; },
     complete: () => !B || B.over || B.player.target !== G.tut.snapTarget },
-  { key: 'fire', when: () => B && !B.over,
+  { key: 'b1-fire', when: () => G.chain && G.chainStep === 2 && B && !B.over,
     label: () => 'Tap your ship: fire', pos: () => actorScreen(G.scene && G.scene.player),
     setup: () => { G.tut.snapAuto = B.player.autofire; },
     complete: () => !B || B.over || B.player.autofire !== G.tut.snapAuto },
+  { key: 'b1-loot', when: () => G.chain && G.chainStep === 2 && !B && G.activeEvent,
+    label: () => 'Take the new gun', pos: () => choiceRect('Take'),
+    complete: () => !G.activeEvent },
+  jumpStep(2),
+  { key: 'e-repair', when: () => G.chain && G.chainStep === 3 && G.activeEvent && !B,
+    label: () => 'Fix your hull here', pos: () => choiceRect('Repair'),
+    complete: () => !G.activeEvent },
+  jumpStep(3),
+  { key: 'p-demand', when: () => G.chain && G.chainStep === 4 && B && !B.over,
+    label: () => 'Demand tribute', pos: () => choiceRect('Demand'),
+    complete: () => !B || B.over },
+  { key: 'p-loot', when: () => G.chain && G.chainStep === 4 && !B && G.activeEvent,
+    label: () => 'Take it', pos: () => choiceRect('Take'),
+    complete: () => !G.activeEvent },
+  jumpStep(4),
+  { key: 'b2-guns', when: () => G.chain && G.chainStep === 5 && B && !B.over,
+    label: () => 'Break their guns', pos: () => actorScreen(foeActor()),
+    complete: () => !B || B.over || B.enemy.sys.weapons < 2 },
+  { key: 'b2-flee', when: () => G.chain && G.chainStep === 5 && B && !B.over,
+    label: () => 'Flee: costs 2 fuel', pos: () => choiceRect('Flee'),
+    complete: () => !B || B.over },
+  { key: 'b2-loot', when: () => G.chain && G.chainStep === 5 && !B && G.activeEvent,
+    label: () => 'Take the salvage', pos: () => firstChoiceRect(),
+    complete: () => !G.activeEvent },
+  jumpStep(5),
+  { key: 'e-buy', when: () => G.chain && G.chainStep === 6 && G.activeEvent && !B,
+    label: () => 'Buy fuel here', pos: () => choiceRect('Buy fuel'),
+    complete: () => !G.activeEvent },
+  jumpStep(6),
+  { key: 'e-commune', when: () => G.chain && G.chainStep === 7 && G.activeEvent && !B,
+    label: () => 'Risk it: commune', pos: () => choiceRect('Commune'),
+    complete: () => !G.activeEvent },
 ];
 function placeFinger(s) {
   const p = s.pos();
@@ -738,7 +793,10 @@ function tutTick() {
   if (T.cur) {
     const s = TUT.find(s => s.key === T.cur);
     if (!s || s.complete()) {
-      if (s) T.done.add(s.key);
+      if (s) {
+        T.done.add(s.key);
+        if (s.key === 'b1-fire' && B && !B.over) { B.player.autofire = true; paintBattle(); } // never stall the demo fight
+      }
       T.cur = null;
       fingerEl.classList.add('hidden');
     } else { placeFinger(s); return; }
@@ -747,8 +805,7 @@ function tutTick() {
     const s = TUT.find(s => !T.done.has(s.key) && s.when());
     if (s) { T.cur = s.key; if (s.setup) s.setup(); placeFinger(s); }
   }
-  if (!T.toasted && ['menu', 'jump', 'event', 'aim', 'fire'].every(k => T.done.has(k))
-    && !B && !G.scene && G.screen === 'play') {
+  if (!T.toasted && !G.chain && G.screen === 'play' && !B && !G.scene && !G.camAnim && !G.activeEvent) {
     T.toasted = true;
     banner('YOU KNOW ENOUGH <small>GO FAR</small>');
   }
@@ -821,11 +878,12 @@ function travelTo(id) {
     return;
   }
   G.fuel -= 1; G.jumps++;
+  if (G.chain) G.chainStep++;
   const node = G.nodes.get(id);
   const first = !node.visited;
   node.visited = true;
   G.current = id;
-  if (first) expandAround(id, cur.id);
+  if (first && !G.chain) expandAround(id, cur.id); // chain nodes are pre-placed; procedural map resumes after
   // 1-2: ship flies along the link, camera follows and dives INTO the node
   G.mapView = { x: cur.x, y: cur.y, z: G.cam.z };
   G.traveler = { x1: cur.x, y1: cur.y, x2: node.x, y2: node.y, dx: node.x - cur.x, dy: node.y - cur.y };
@@ -945,14 +1003,22 @@ function drawEnv(node, t) {
 }
 
 function beginEncounter(node) {
-  let key = SECTOR_EVENT[node.type];
-  if (!key || G.rng() < 0.3) key = randomEvent(G.rng, dangerOf(node));
+  const sc = node.script; // scripted tutorial node: fixed content, no RNG
+  if (sc && sc.battle) {
+    const sector = (SECTOR_STAGE[node.type] ? SECTOR_STAGE[node.type](node) : []);
+    G.scene.actors = G.scene.actors.concat(sector, (SCENES[sc.battle.who] || SCENES.combat)(node, sc.battle.who));
+    startBattle(sc.battle.who, sc.battle.foe, sc.battle.stance, sc.battle);
+    return;
+  }
+  let key = sc ? sc.ev : SECTOR_EVENT[node.type];
+  if (!key || (!sc && G.rng() < 0.3)) key = randomEvent(G.rng, dangerOf(node));
   const source = G.encounters.has(node.id) ? 'empty' : key;
   const ev = JSON.parse(JSON.stringify(EVENTS[source]));
   ev.subtitle = `${node.name} · ${node.type.toUpperCase()}`;
   G.activeEvent = ev;
   G.outcome = null;
   G.encounters.add(node.id);
+  if (sc) G.script = sc; // choose() forces the outcome so the tutorial never gambles
   // 4: sector environment + procedural actors + opening codec
   const sector = (SECTOR_STAGE[node.type] ? SECTOR_STAGE[node.type](node) : []);
   const actors = (SCENES[source] || (() => []))(node);
@@ -1006,6 +1072,7 @@ const G = {
   shake: 0, // screenshake magnitude
   hoverId: 0, // node under the cursor (map tooltip)
   tut: { off: false, done: new Set(), cur: null, toasted: false }, // finger tutorial (reset per run)
+  chain: null, chainStep: 0, script: null, // scripted opening chain
 };
 
 function sectorType(rng, distance) {
@@ -1102,16 +1169,24 @@ function startRun(faction) {
     : faction.id === 'webes' ? { w1: 'ion', w2: 'laser' } : { w1: 'laser', w2: 'laser' };
   G.activeEvent = null; G.outcome = null;
   G.scene = null; G.camAnim = null; G.traveler = null; G.encounters = new Set();
-  G.tut = { off: false, done: new Set(['menu']), cur: null, toasted: false }; // fresh tutorial every run
+  G.script = null;
+  G.tut = { off: false, done: new Set(), cur: null, toasted: false }; // fresh tutorial every run
   fingerEl.classList.add('hidden');
   const start = addNode('Station', 0, 0);
   G.nodes.get(start).visited = true;
+  G.nodes.get(start).name = 'Home Dock';
   G.encounters.add(start);
   G.current = start;
-  const n0 = 3 + Math.floor(G.rng() * 3);
-  for (let i = 0; i < n0; i++) {
-    const a = (i / n0) * TAU + G.rng() * 0.5;
-    link(start, addNode(sectorType(G.rng, 0), Math.cos(a) * 260, Math.sin(a) * 260));
+  // scripted opening: 7 fixed nodes in a line, each teaches one mechanic in order
+  G.chain = []; G.chainStep = 0;
+  let cx0 = 0, cy0 = 0;
+  for (let i = 0; i < CHAIN.length; i++) {
+    cx0 += CHAIN_DXY[i][0]; cy0 += CHAIN_DXY[i][1];
+    const id = addNode(CHAIN[i].type, cx0, cy0);
+    const n = G.nodes.get(id);
+    n.name = CHAIN[i].name; n.script = CHAIN[i];
+    link(i ? G.chain[i - 1] : start, id);
+    G.chain.push(id);
   }
   G.cam = { x: 0, y: 0, z: Math.min(1, Math.min(W, H) / 700) };
   G.screen = 'play';
@@ -1177,6 +1252,7 @@ function choose(i) {
     paintHUD(); return closeEvent(`${ev.title} — hull welded and sealed. +${amt} hull.`);
   } else if (c.archs && G.faction.id === 'archs') pick = 0;
   else if (c.spades && G.faction.id === 'spades') { applyDelta([0, 32, -6]); return closeEvent(`${ev.title} — the Rift feeds its own. +32 scrap.`); }
+  if (pick === null && G.script && G.script.pick != null) pick = G.script.pick < c.out.length ? G.script.pick : 0; // tutorial outcome is scripted, never a gamble
   if (pick === null) {
     const danger = dangerOf(G.nodes.get(G.current));
     const badOdds = clamp(0.25 + danger * 0.06 - (G.faction.id === 'celestials' ? 0.1 : 0), 0.1, 0.75);
@@ -1198,12 +1274,22 @@ function applyDelta([f, s, h]) {
 function closeEvent(outcomeText) {
   G.activeEvent = null;
   G.outcome = null;
+  G.script = null;
   if (G.hull <= 0) {
     const pa = G.scene ? G.scene.player : null;
     if (pa) { pa.dead = true; burst(pa.x, pa.y, '#f87171', 40); }
     return gameOver('HULL BREACHED — CLAIMED BY THE RIFT');
   }
   if (G.fuel <= 0) return gameOver('OUT OF FUEL — ADRIFT IN THE RIFT');
+  // tutorial chain: after the last scripted node, hand the map back to procedural
+  // (tutTick shows the closing toast once the player is back on the open map)
+  if (G.chain) {
+    const cur = G.nodes.get(G.current);
+    if (cur && cur.script && cur.script.last) {
+      G.chain = null;
+      expandAround(G.current, cur.links[0]); // grow the real map away from the chain line
+    }
+  }
   banner(outcomeText.split('—')[1]?.trim().toUpperCase().slice(0, 60) || 'EVENT RESOLVED');
   setTimeout(exitScene, 800);
 }
