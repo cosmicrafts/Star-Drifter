@@ -133,19 +133,33 @@ html, body {
 #b-log { flex-basis: 100%; max-height: 110px; overflow-y: auto; font-size: 11px; color: var(--muted);
   background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.4rem 0.5rem; }
 
-/* onboarding coach marks */
-#coach {
-  position: absolute; top: 116px; left: 50%; transform: translateX(-50%);
-  z-index: 8; width: min(440px, calc(100% - 2rem));
-  padding: 0.85rem 0.95rem; text-align: left; pointer-events: auto;
-  border-top: 2px solid var(--accent);
+/* finger tutorial: points where to tap, never eats clicks */
+#finger { position: fixed; left: 0; top: 0; z-index: 9; pointer-events: none; width: 0; height: 0; }
+.f-ring {
+  position: absolute; left: -24px; top: -24px; width: 48px; height: 48px;
+  border: 2px solid var(--accent); border-radius: 50%;
+  animation: fring 1s ease-out infinite;
 }
-#coach .kicker { font-size: 10px; }
-#coach p { margin: 0.35rem 0 0; font-size: 13px; line-height: 1.5; color: var(--ink); }
-#coach .coach-actions { display: flex; gap: 0.4rem; margin-top: 0.65rem; align-items: center; }
-#coach .coach-actions .btn { padding: 0.45rem 0.85rem; font-size: 11px; }
-#coach .btn-skip { background: transparent; border-color: var(--line); color: var(--muted); }
-#coach .btn-skip:hover { color: var(--ink); }
+@keyframes fring { 0% { transform: scale(0.55); opacity: 0.95; } 100% { transform: scale(1.25); opacity: 0; } }
+.f-hand {
+  position: absolute; left: -19px; top: -88px; font-size: 38px;
+  animation: fbounce 0.7s ease-in-out infinite;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.7));
+}
+@keyframes fbounce { 0%, 100% { transform: translateY(-4px); } 50% { transform: translateY(10px); } }
+#finger-label {
+  position: absolute; left: 0; top: 28px; transform: translateX(-50%);
+  white-space: nowrap; background: rgba(2, 6, 16, 0.9);
+  border: 1px solid var(--line); border-radius: 8px; padding: 0.3rem 0.6rem;
+  font-size: 12px; font-weight: 800; letter-spacing: 0.06em; color: var(--ink);
+}
+#tutskip {
+  position: fixed; right: 0.7rem; bottom: 0.7rem; z-index: 9;
+  background: transparent; border: 1px solid var(--line); border-radius: 8px;
+  color: var(--faint); font-size: 10px; letter-spacing: 0.15em;
+  padding: 0.4rem 0.6rem; cursor: pointer; font-family: inherit;
+}
+#tutskip:hover { color: var(--ink); border-color: var(--line-strong); }
 
 /* codec (MGS-style dialogue) */
 #codec {
