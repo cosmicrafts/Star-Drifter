@@ -239,8 +239,14 @@ function startBattle(who, foeKey, stance, script) {
   if (script) { // scripted tutorial fight: fixed stats, fixed outcomes
     if (script.hull) enemy.hull = enemy.maxHull = script.hull;
     if (script.shield != null) enemy.sh = enemy.maxSh = script.shield;
+    if (script.noShieldRegen) enemy.sys.shields = 0; // tutorial: no infinite regen vs 1-dmg lasers
     if (script.weapons) enemy.weapons = script.weapons.map(mkWeapon);
     if (script.parleyLong) B.parleyTicks = 20;
+    if (script.ambush) { // they caught you cold: real hull damage so the repair lesson matters
+      player.hull = Math.max(15, player.hull - script.ambush);
+      G.hull = player.hull;
+      paintHUD();
+    }
   }
   // link actors: player ship + last foe actor get live hp bars
   const S = G.scene;
@@ -265,6 +271,9 @@ function startBattle(who, foeKey, stance, script) {
   if (stance === 'hostile' && G.scene) {
     const fa = G.scene.actors.find(a => a.foe) || G.scene.actors[G.scene.actors.length - 1];
     if (fa) floatText(fa.x, fa.y - 60, 'HOSTILE!', '#f87171');
+  }
+  if (script && script.ambush && G.scene) {
+    floatText(G.scene.player.x, G.scene.player.y - 56, `-${script.ambush} HULL — AMBUSH!`, '#f87171');
   }
   paintBattle();
   B.timer = setInterval(battleTick, 600);
@@ -345,7 +354,8 @@ function fireWeapon(ship, w, foe, targetSys) {
     if (Ta) floatText(Ta.x, Ta.y - 30, `-${dmg}`, '#f87171');
     if (w.key !== 'ion' && Math.random() < 0.65 && Ta) burst(Ta.x, Ta.y, '#fbbf24', 6); // sparks
   }
-  if (sysDmg > 0 && Math.random() < 0.65) {
+  const sureSys = ship.side === 'player' && B && B.script && B.script.sureSysHit; // tutorial: breaking systems always lands
+  if (sysDmg > 0 && (sureSys || Math.random() < 0.65)) {
     const sys = w.key === 'ion' ? targetSys : ['weapons', 'engines', 'shields'][Math.floor(Math.random() * 3)];
     if (foe.sys[sys] > 0) {
       foe.sys[sys] = Math.max(0, foe.sys[sys] - (w.key === 'ion' ? 2 : 1));
@@ -709,21 +719,30 @@ function choiceRect(txt) {
     const r = el.getBoundingClientRect();
     if (r.width) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   }
+  // buttons not rendered yet (typewriter still typing): keep the finger on the panel, never blink
+  const codec = document.getElementById('codec');
+  if (codec && !codec.classList.contains('hidden')) {
+    const r = document.getElementById('codec-body').getBoundingClientRect();
+    if (r.width) return { x: r.left + 150, y: r.bottom - 8 };
+  }
   return null;
 }
 // ---------- scripted opening chain: every run teaches the same beats, in order ----------
-// 7 fixed nodes in a line; each forces its content (no RNG) so the finger can
-// walk the player through: trade -> fight -> repair -> negotiate -> break+flee -> refuel -> gamble.
+// 9 fixed nodes in a line; each forces its content (no RNG) so the finger can
+// walk the player through: trade -> fight -> repair -> anomaly -> negotiate ->
+// break guns + flee -> refuel -> mining -> gamble. Then the procedural map opens.
 const CHAIN = [
   { type: 'Empty', name: 'First Drift', ev: 'merchant', pick: 0 },
-  { type: 'Combat', name: 'Pirate Ambush', battle: { who: 'pirates', foe: 'scout', stance: 'hostile', hull: 3, shield: 0, weapons: ['laser'], loot: [3, 14, 0], drop: 'ion', noSurrender: true, noEscape: true } },
+  { type: 'Combat', name: 'Pirate Ambush', battle: { who: 'pirates', foe: 'scout', stance: 'hostile', hull: 4, shield: 0, weapons: ['laser'], ambush: 30, loot: [3, 14, 0], drop: 'ion', noSurrender: true, noEscape: true } },
   { type: 'Station', name: 'Repair Dock', ev: 'station', pick: 0 },
+  { type: 'Anomaly', name: 'Strange Light', ev: 'anomaly', pick: 0 },
   { type: 'Nebula', name: 'Silent Signal', battle: { who: 'patrol', foe: 'scout', stance: 'parley', hull: 16, shield: 1, weapons: ['laser'], parleyLong: true, demandSure: true, loot: [3, 10, 0] } },
-  { type: 'Combat', name: 'Drone Swarm', battle: { who: 'combat', foe: 'drone', stance: 'hostile', hull: 40, shield: 1, weapons: ['laser'], fleeSure: true } },
+  { type: 'Combat', name: 'Drone Swarm', battle: { who: 'combat', foe: 'drone', stance: 'hostile', hull: 40, shield: 1, weapons: ['laser'], fleeSure: true, sureSysHit: true, noShieldRegen: true } },
   { type: 'Station', name: 'Fuel Depot', ev: 'station', pick: 0 },
+  { type: 'AsteroidField', name: 'Broken Belt', ev: 'mining', pick: 0 },
   { type: 'CelestialSite', name: 'Ancient Ruins', ev: 'celestial', pick: 0, last: true },
 ];
-const CHAIN_DXY = [[240, -60], [230, 120], [250, -110], [230, 130], [250, -90], [230, 110], [250, -70]];
+const CHAIN_DXY = [[240, -60], [230, 120], [250, -110], [230, 60], [240, -130], [230, 130], [250, -90], [230, 110], [250, -70]];
 const mapClear = () => G.screen === 'play' && !G.scene && !G.camAnim && !B && !G.activeEvent;
 const jumpStep = i => ({
   key: 'j' + i, when: () => G.chain && G.chainStep === i && mapClear(),
@@ -755,28 +774,36 @@ const TUT = [
     label: () => 'Fix your hull here', pos: () => choiceRect('Repair'),
     complete: () => !G.activeEvent },
   jumpStep(3),
-  { key: 'p-demand', when: () => G.chain && G.chainStep === 4 && B && !B.over,
-    label: () => 'Demand tribute', pos: () => choiceRect('Demand'),
-    complete: () => !B || B.over },
-  { key: 'p-loot', when: () => G.chain && G.chainStep === 4 && !B && G.activeEvent,
-    label: () => 'Take it', pos: () => choiceRect('Take'),
+  { key: 'e-anom', when: () => G.chain && G.chainStep === 4 && G.activeEvent && !B,
+    label: () => 'Investigate it', pos: () => choiceRect('Investigate'),
     complete: () => !G.activeEvent },
   jumpStep(4),
-  { key: 'b2-guns', when: () => G.chain && G.chainStep === 5 && B && !B.over,
-    label: () => 'Break their guns', pos: () => actorScreen(foeActor()),
-    complete: () => !B || B.over || B.enemy.sys.weapons < 2 },
-  { key: 'b2-flee', when: () => G.chain && G.chainStep === 5 && B && !B.over,
-    label: () => 'Flee: costs 2 fuel', pos: () => choiceRect('Flee'),
+  { key: 'p-demand', when: () => G.chain && G.chainStep === 5 && B && !B.over,
+    label: () => 'Demand tribute', pos: () => choiceRect('Demand'),
     complete: () => !B || B.over },
-  { key: 'b2-loot', when: () => G.chain && G.chainStep === 5 && !B && G.activeEvent,
-    label: () => 'Take the salvage', pos: () => firstChoiceRect(),
+  { key: 'p-loot', when: () => G.chain && G.chainStep === 5 && !B && G.activeEvent,
+    label: () => 'Take it', pos: () => choiceRect('Take'),
     complete: () => !G.activeEvent },
   jumpStep(5),
-  { key: 'e-buy', when: () => G.chain && G.chainStep === 6 && G.activeEvent && !B,
-    label: () => 'Buy fuel here', pos: () => choiceRect('Buy fuel'),
+  { key: 'b2-guns', when: () => G.chain && G.chainStep === 6 && B && !B.over,
+    label: () => 'Break their guns', pos: () => actorScreen(foeActor()),
+    complete: () => !B || B.over || B.enemy.sys.weapons < 2 },
+  { key: 'b2-flee', when: () => G.chain && G.chainStep === 6 && B && !B.over,
+    label: () => 'Flee: costs 2 fuel', pos: () => choiceRect('Flee'),
+    complete: () => !B || B.over },
+  { key: 'b2-loot', when: () => G.chain && G.chainStep === 6 && !B && G.activeEvent,
+    label: () => 'Take the salvage', pos: () => firstChoiceRect(),
     complete: () => !G.activeEvent },
   jumpStep(6),
-  { key: 'e-commune', when: () => G.chain && G.chainStep === 7 && G.activeEvent && !B,
+  { key: 'e-buy', when: () => G.chain && G.chainStep === 7 && G.activeEvent && !B,
+    label: () => 'Buy fuel here', pos: () => choiceRect('Buy fuel'),
+    complete: () => !G.activeEvent },
+  jumpStep(7),
+  { key: 'e-mine', when: () => G.chain && G.chainStep === 8 && G.activeEvent && !B,
+    label: () => 'Mine carefully', pos: () => choiceRect('Mine carefully'),
+    complete: () => !G.activeEvent },
+  jumpStep(8),
+  { key: 'e-commune', when: () => G.chain && G.chainStep === 9 && G.activeEvent && !B,
     label: () => 'Risk it: commune', pos: () => choiceRect('Commune'),
     complete: () => !G.activeEvent },
 ];
@@ -1165,8 +1192,8 @@ function startRun(faction) {
   G.nodes.clear(); G.nextId = 1;
   G.fuel = 50 + (faction.id === 'cosmicons' ? 15 : faction.id === 'webes' ? 10 : 0);
   G.scrap = 15 + (faction.id === 'spirats' ? 10 : 0);
-  G.maxHull = 100;
-  G.hull = 100 + (faction.id === 'celestials' ? 20 : 0);
+  G.maxHull = 100 + (faction.id === 'celestials' ? 20 : 0);
+  G.hull = G.maxHull;
   G.jumps = 0; G.kills = 0;
   G.ship = faction.id === 'spirats' ? { w1: 'laser', w2: 'missile' }
     : faction.id === 'webes' ? { w1: 'ion', w2: 'laser' } : { w1: 'laser', w2: 'laser' };
