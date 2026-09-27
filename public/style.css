@@ -108,6 +108,43 @@ html, body {
 }
 #tutskip:hover { color: var(--ink); border-color: var(--line-strong); }
 
+/* fight panel: combat lives here, docked right; the codec is for dialogue only */
+#fight {
+  position: absolute; right: 8px; top: 60px; width: 212px; z-index: 5;
+  display: flex; flex-direction: column; gap: 0.45rem;
+}
+#fight .f-card {
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0.55rem 0.6rem; font-size: 11px;
+}
+.f-name { font-weight: 900; letter-spacing: 0.1em; color: var(--muted); font-size: 10px; }
+.f-hull { height: 8px; background: var(--surface-3); border-radius: 4px; overflow: hidden; margin-top: 0.35rem; }
+.f-hull i { display: block; height: 100%; background: linear-gradient(90deg, var(--green), var(--accent)); transition: width 0.3s; }
+#f-foe .f-hull i { background: linear-gradient(90deg, #f87171, #fb923c); }
+.f-sh { display: flex; gap: 3px; margin-top: 0.3rem; min-height: 6px; }
+.f-sh b { width: 12px; height: 6px; border-radius: 2px; background: var(--accent); }
+.f-cap { color: var(--faint); font-size: 9px; letter-spacing: 0.22em; margin: 0.5rem 0 0.3rem; }
+.f-tgt {
+  display: block; width: 100%; text-align: center; margin: 0.18rem 0;
+  padding: 0.45rem 0.4rem; cursor: pointer; font-family: inherit;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.12em;
+}
+.f-tgt:hover { border-color: var(--line-strong); color: var(--ink); }
+.f-tgt.sel { border-color: var(--red); color: var(--ink); box-shadow: 0 0 12px rgba(248, 113, 113, 0.28); }
+.f-tgt.sel::after { content: " ◂"; color: var(--red); }
+.f-tgt.off { opacity: 0.35; text-decoration: line-through; }
+.f-w { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.35rem; }
+.f-w span { width: 66px; color: var(--muted); font-weight: 800; font-size: 9px; letter-spacing: 0.06em; }
+.f-wbar { flex: 1; height: 7px; background: var(--surface-3); border-radius: 3px; overflow: hidden; }
+.f-wbar i { display: block; height: 100%; transition: width 0.25s; }
+.f-w em { width: 40px; text-align: right; font-style: normal; color: var(--faint); font-size: 9px; font-weight: 800; }
+#f-actions { display: flex; gap: 0.35rem; margin-top: 0.55rem; }
+#f-actions .btn { flex: 1 1 50%; padding: 0.5rem 0.25rem; font-size: 9px; letter-spacing: 0.04em; }
+#f-log { color: var(--faint); font-size: 10px; line-height: 1.55; max-height: 96px; overflow: hidden; }
+#f-log div:first-child { color: var(--ink); }
+
 /* codec (MGS-style dialogue) */
 #codec {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;

@@ -241,6 +241,7 @@ function startBattle(who, foeKey, stance, script) {
     if (script.shield != null) enemy.sh = enemy.maxSh = script.shield;
     if (script.noShieldRegen) enemy.sys.shields = 0; // tutorial: no infinite regen vs 1-dmg lasers
     if (script.weapons) enemy.weapons = script.weapons.map(mkWeapon);
+    if (script.name) enemy.name = script.name; // scripted foes can carry their own identity
     if (script.sys) Object.assign(enemy.sys, script.sys); // tutorial: pin engines so there is no evade-roll stall
     if (script.parleyLong) B.parleyTicks = 20;
     if (script.ambush) { // they caught you cold: real hull damage so the repair lesson matters
@@ -276,13 +277,16 @@ function startBattle(who, foeKey, stance, script) {
   if (script && script.ambush && G.scene) {
     floatText(G.scene.player.x, G.scene.player.y - 56, `-${script.ambush} HULL — AMBUSH!`, '#f87171');
   }
+  if (G.scene) flyTo(G.scene.anchor.x, G.scene.anchor.y, 6.8, 550, () => { }); // pull back: the fight panel owns the right edge
   paintBattle();
   B.timer = setInterval(battleTick, 600);
   window.__sd.battle = B;
 }
 function blog(msg) {
-  B.log.unshift(`<div>t${B.tick} · ${msg}</div>`); // in-memory only; the codec is the UI
+  B.log.unshift(`<div>${msg}</div>`);
   if (B.log.length > 30) B.log.pop();
+  const el = document.getElementById('f-log');
+  if (el) el.innerHTML = B.log.slice(0, 6).join('');
 }
 function chargeRate(ship) {
   return 0.6 * (ship.manning ? 1.35 : 1) * (ship.sys.weapons > 0 ? 1 : 0.4); // 2: seconds per tick (600ms), not 1
@@ -390,6 +394,7 @@ function endBattle(result) {
   if (!B || B.over) return;
   B.over = true;
   clearInterval(B.timer);
+  hideFight();
   G.hull = Math.max(0, B.player.hull);
   const foe = B.enemy;
   const S = G.scene;
@@ -449,10 +454,8 @@ function bTarget() {
   if (!B || B.over) return;
   const order = ['weapons', 'engines', 'shields'];
   B.player.target = order[(order.indexOf(B.player.target) + 1) % 3];
-  blog(`🎯 Targeting ${SYS_LABEL[B.player.target]}.`);
+  blog(`🎯 Shooting their ${SYS_LABEL[B.player.target]}.`);
   paintBattle();
-  const els = document.querySelectorAll('#codec-choices .btn'); // button must follow the box, no stale label
-  if (els[1]) els[1].innerHTML = `<b>2. 🎯 ${SYS_LABEL[B.player.target]}</b>`;
 }
 // toggle autofire: off = weapons hold at full charge; click your ship again to fire the volley
 function bAuto() {
@@ -518,6 +521,7 @@ function bTalk(mode) {
       const ev = { title: 'Tribute Paid', desc: 'They hand over cargo and withdraw.', choices: [{ t: 'Take it', req: {}, loot, out: [['Tribute secured.', loot]] }] };
       B.over = true; clearInterval(B.timer);
       B = null; window.__sd.battle = null;
+      hideFight();
       paintHUD();
       G.activeEvent = ev;
       codecSay({ ...SPEAKERS.pirate, text: ev.desc, choices: codecChoicesFor(ev) });
@@ -531,6 +535,7 @@ function bTalk(mode) {
     G.activeEvent = sd;
     B.over = true; clearInterval(B.timer);
     B = null; window.__sd.battle = null;
+    hideFight();
     paintHUD();
     codecSay({ ...SPEAKERS.self, text: sd.desc, choices: codecChoicesFor(sd) });
   } else if (mode === 'refuse') {
@@ -540,19 +545,59 @@ function bTalk(mode) {
   paintBattle();
 }
 
-// ---------- battle UI: codec IS the interface (6) ----------
-// phase-aware buttons; codec text shows a one-line status, no typewriter spam in fight.
+// ---------- battle UI: dedicated side panel; the codec is for dialogue only ----------
+const fightEl = document.getElementById('fight');
+function hideFight() { fightEl.classList.add('hidden'); }
+function setTarget(sys) {
+  if (!B || B.over || B.player.target === sys) return;
+  B.player.target = sys;
+  blog(`🎯 Shooting their ${SYS_LABEL[sys]}.`);
+  updateFight();
+}
+function updateFight() {
+  if (!B) { hideFight(); return; }
+  fightEl.classList.remove('hidden');
+  document.getElementById('f-foe-name').textContent = B.enemy.name.toUpperCase();
+  document.getElementById('f-foe-hull').style.width = Math.max(0, 100 * B.enemy.hull / B.enemy.maxHull) + '%';
+  document.getElementById('f-foe-sh').innerHTML = '<b></b>'.repeat(Math.max(0, B.enemy.sh));
+  for (const s of ['weapons', 'engines', 'shields']) {
+    const btn = document.getElementById('f-tgt-' + s);
+    btn.classList.toggle('sel', B.player.target === s);
+    btn.classList.toggle('off', B.enemy.sys[s] === 0);
+  }
+  document.getElementById('f-me-hull').style.width = Math.max(0, 100 * B.player.hull / B.player.maxHull) + '%';
+  document.getElementById('f-me-sh').innerHTML = '<b></b>'.repeat(Math.max(0, B.player.sh));
+  document.getElementById('f-weapons').innerHTML = B.player.weapons.map(w => {
+    const pct = Math.min(100, Math.round(100 * w.charge / w.cd));
+    const ready = pct >= 100;
+    const empty = w.ammoLeft === 0;
+    const ammo = w.ammoLeft != null ? ` ×${w.ammoLeft}` : '';
+    const bar = empty ? 'width:100%;background:var(--faint);opacity:0.25'
+      : `width:${pct}%;background:${ready ? w.color : 'var(--accent)'}`;
+    return `<div class="f-w"><span>${w.name.toUpperCase()}${ammo}</span><div class="f-wbar"><i style="${bar}"></i></div><em>${empty ? 'EMPTY' : ready ? 'READY' : pct + '%'}</em></div>`;
+  }).join('');
+  const ab = document.getElementById('f-auto');
+  ab.textContent = B.player.autofire ? '⚙ AUTO-FIRE ON' : '✋ MANUAL — TAP SHIP';
+  ab.classList.toggle('btn-primary', !B.player.autofire);
+  document.getElementById('f-flee').disabled = B.player.sys.engines === 0;
+}
+document.getElementById('f-tgt-weapons').addEventListener('click', () => setTarget('weapons'));
+document.getElementById('f-tgt-engines').addEventListener('click', () => setTarget('engines'));
+document.getElementById('f-tgt-shields').addEventListener('click', () => setTarget('shields'));
+document.getElementById('f-auto').addEventListener('click', () => bAuto());
+document.getElementById('f-flee').addEventListener('click', () => bFlee());
+// phase-aware: fight = panel only (codec clear); parley/surrender = codec dialogue
 function battlePhase() {
   if (B.paused && B.surrenderOffered) return 'surrender';
   if (B.stance === 'parley' && B.parleyTicks > 0) return 'parley';
   return 'fight';
 }
 function paintBattle() {
-  if (!B) return;
+  if (!B) { hideFight(); return; }
+  updateFight();
   const phase = battlePhase();
-  const uiKey = phase + '|' + (B.player.autofire ? 'auto' : 'man');
-  if (uiKey === B.uiPhase) { battleStatusLine(); return; } // buttons stable; refresh text only
-  B.uiPhase = uiKey;
+  if (phase === B.uiPhase) return; // dialogue stable; panel keeps refreshing
+  B.uiPhase = phase;
   const foeSp = B.who === 'pirates' || B.who === 'trap' ? SPEAKERS.pirate
     : B.who === 'patrol' ? SPEAKERS.patrol
     : { name: B.enemy.name, color: '#e879f9', glyph: '◮' };
@@ -569,26 +614,8 @@ function paintBattle() {
       { t: 'No mercy', fn: () => bTalk('refuse') },
     ] });
   } else {
-    // real orders: fire control matters, click ships for target/volley
-    codecSay({ ...SPEAKERS.self, text: battleStatusText() + ' — click the enemy ship to change what you hit', choices: [
-      { t: B.player.autofire ? '⚙ AUTO-FIRE: ON' : '✋ MANUAL — click to FIRE', primary: !B.player.autofire, fn: () => bAuto() },
-      { t: `🎯 ${SYS_LABEL[B.player.target]}`, fn: () => bTarget() },
-      { t: '💨 Flee', fn: () => bFlee() },
-    ] });
+    codecClear(); // fight: the panel IS the interface
   }
-}
-function battleStatusText() {
-  if (!B) return '';
-  const wps = B.player.weapons.map(w => {
-    const pct = Math.min(100, Math.round(100 * w.charge / w.cd));
-    const ammo = w.ammoLeft != null ? ` ×${w.ammoLeft}` : '';
-    return `${w.name}${ammo} ${pct >= 100 ? 'READY' : pct + '%'}`;
-  }).join(' · ');
-  return `${B.player.autofire ? '⚙ auto' : '✋ manual'} · ${wps}`;
-}
-function battleStatusLine() {
-  const el = document.getElementById('codec-text');
-  if (el && B && battlePhase() === 'fight') el.textContent = battleStatusText();
 }
 
 // ---------- codec dialogue (MGS-style) ----------
@@ -743,7 +770,7 @@ const CHAIN = [
   { type: 'Combat', name: 'Pirate Ambush', battle: { who: 'pirates', foe: 'scout', stance: 'hostile', hull: 4, shield: 0, weapons: ['laser'], ambush: 30, loot: [3, 14, 0], drop: 'ion', noSurrender: true, noEscape: true } },
   { type: 'Station', name: 'Repair Dock', ev: 'station', pick: 0 },
   { type: 'Anomaly', name: 'Strange Light', ev: 'anomaly', pick: 0 },
-  { type: 'Nebula', name: 'Silent Signal', battle: { who: 'patrol', foe: 'scout', stance: 'parley', hull: 16, shield: 1, weapons: ['laser'], parleyLong: true, demandSure: true, loot: [3, 10, 0] } },
+  { type: 'Nebula', name: 'Silent Signal', battle: { who: 'patrol', foe: 'scout', stance: 'parley', name: 'Order Patrol', hull: 16, shield: 1, weapons: ['laser'], parleyLong: true, demandSure: true, loot: [3, 10, 0] } },
   { type: 'Combat', name: 'Drone Swarm', battle: { who: 'combat', foe: 'drone', stance: 'hostile', hull: 40, shield: 1, weapons: ['laser'], fleeSure: true, sureSysHit: true, noShieldRegen: true } },
   { type: 'Station', name: 'Fuel Depot', ev: 'station', pick: 0 },
   { type: 'AsteroidField', name: 'Broken Belt', ev: 'mining', pick: 0 },
@@ -800,7 +827,7 @@ const TUT = [
     complete: () => !B || B.over || ['weapons', 'engines', 'shields'].some(s => B.enemy.sys[s] < G.tut.snapSys[s]), // any system you broke counts: never stuck on a misclick
   },
   { key: 'b2-flee', when: () => G.chain && G.chainStep === 6 && B && !B.over,
-    label: () => 'Flee: costs 2 fuel', pos: () => choiceRect('Flee'),
+    label: () => 'Flee: costs 2 fuel', pos: () => rectCenter('#f-flee'),
     complete: () => !B || B.over },
   { key: 'b2-loot', when: () => G.chain && G.chainStep === 6 && !B && G.activeEvent,
     label: () => 'Take the salvage', pos: () => firstChoiceRect(),
@@ -1226,6 +1253,7 @@ function startRun(faction) {
   G.script = null;
   G.tut = { off: false, done: new Set(), cur: null, toasted: false }; // fresh tutorial every run
   fingerEl.classList.add('hidden');
+  hideFight();
   const start = addNode('Station', 0, 0);
   G.nodes.get(start).visited = true;
   G.nodes.get(start).name = 'Home Dock';
@@ -1350,6 +1378,7 @@ function gameOver(reason) {
   G.screen = 'over';
   G.tut.cur = null;
   fingerEl.classList.add('hidden');
+  hideFight();
   const score = G.jumps * 10 + G.scrap + G.kills * 5;
   if (score > G.best) { G.best = score; localStorage.setItem('sd-best', String(score)); }
   document.getElementById('over-title').textContent = reason;
@@ -1533,7 +1562,7 @@ window.addEventListener('pointerup', e => {
       const foeA = G.scene.actors.find(a => a.hp === B.enemy);
       if (foeA) {
         const fx = (foeA.x - G.cam.x) * G.cam.z + W / 2, fy = (foeA.y - G.cam.y) * G.cam.z + H / 2;
-        if (Math.hypot(sx - fx, sy - fy) < 70) { bTarget(); floatText(foeA.x, foeA.y - 40, `TARGET: ${SYS_LABEL[B.player.target]}`, '#f87171'); return; }
+        if (Math.hypot(sx - fx, sy - fy) < 70) { bTarget(); floatText(foeA.x, foeA.y - 40, `SHOOT AT: ${SYS_LABEL[B.player.target]}`, '#f87171'); return; }
       }
       const me = G.scene.player;
       const mx = (me.x - G.cam.x) * G.cam.z + W / 2, my = (me.y - G.cam.y) * G.cam.z + H / 2;
@@ -1754,39 +1783,6 @@ function drawActorBar(a) {
   ctx.fillRect(ax - w / 2 + 1, ay - 45, w * pct - 2, 5);
   ctx.fillStyle = '#7dd3fc';
   for (let i = 0; i < s.sh; i++) ctx.fillRect(ax - w / 2 + i * 8, ay - 54, 6, 4);
-  // 3: per-weapon charge bars under the hull bar — you SEE them arm, no text decoding
-  if (s.weapons && !a.foe) {
-    for (let i = 0; i < s.weapons.length; i++) {
-      const wp = s.weapons[i];
-      const pct = Math.min(1, wp.charge / wp.cd);
-      const bw = 38, bx = ax - (s.weapons.length * (bw + 4) - 4) / 2 + i * (bw + 4);
-      ctx.fillStyle = 'rgba(148,163,184,0.25)';
-      ctx.fillRect(bx, ay - 38, bw, 3);
-      ctx.fillStyle = wp.color;
-      ctx.fillRect(bx, ay - 38, bw * pct, 3);
-    }
-  }
-  // 4: enemy systems are clickable targets — labelled so it reads as a target row
-  if (a.foe && window.__sd && window.__sd.battle && !window.__sd.battle.over) {
-    const Bx = window.__sd.battle;
-    const labels = ['weapons', 'engines', 'shields'];
-    const rowY = ay + 52;
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(248,113,113,0.85)';
-    ctx.font = 'bold 9px sans-serif';
-    ctx.fillText('▼ SHOOT AT', ax, rowY - 16);
-    ctx.font = 'bold 9px sans-serif';
-    for (let i = 0; i < labels.length; i++) {
-      const lx = ax + (i - 1) * 62;
-      const hot = Bx.player.target === labels[i];
-      if (hot) { // box around the selected system — reads as "this is what you hit"
-        ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5;
-        ctx.strokeRect(lx - 27, rowY - 10, 54, 15);
-      }
-      ctx.fillStyle = hot ? '#f87171' : 'rgba(148,163,184,0.55)';
-      ctx.fillText(SYS_LABEL[labels[i]], lx, rowY + 1);
-    }
-  }
   if (a.crewLine) {
     ctx.fillStyle = 'rgba(148,163,184,0.9)';
     ctx.font = '10px sans-serif'; ctx.textAlign = 'center';

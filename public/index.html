@@ -27,7 +27,7 @@
       <p class="hint">Click a connected node to jump (1 fuel) · pan by dragging · wheel to zoom · keys 1-4 pick event choices</p>
     </div>
 
-    <!-- Codec dialogue (MGS-style) -->
+    <!-- Codec dialogue (MGS-style) — story/negotiation ONLY, never the fight HUD -->
     <div id="codec" class="hidden">
       <div id="codec-portrait"></div>
       <div id="codec-body">
@@ -35,6 +35,30 @@
         <div id="codec-text"></div>
         <div id="codec-choices"></div>
       </div>
+    </div>
+
+    <!-- Fight panel: all combat state + controls live here, docked right -->
+    <div id="fight" class="hidden">
+      <div class="f-card" id="f-foe">
+        <div class="f-name" id="f-foe-name">ENEMY</div>
+        <div class="f-hull"><i id="f-foe-hull"></i></div>
+        <div class="f-sh" id="f-foe-sh"></div>
+        <div class="f-cap">SHOOT AT</div>
+        <button class="f-tgt" id="f-tgt-weapons">GUNS</button>
+        <button class="f-tgt" id="f-tgt-engines">ENGINES</button>
+        <button class="f-tgt" id="f-tgt-shields">SHIELDS</button>
+      </div>
+      <div class="f-card" id="f-me">
+        <div class="f-name">YOUR SHIP</div>
+        <div class="f-hull"><i id="f-me-hull"></i></div>
+        <div class="f-sh" id="f-me-sh"></div>
+        <div id="f-weapons"></div>
+        <div id="f-actions">
+          <button class="btn" id="f-auto">AUTO-FIRE ON</button>
+          <button class="btn" id="f-flee">FLEE −2 FUEL</button>
+        </div>
+      </div>
+      <div class="f-card" id="f-log"></div>
     </div>
 
     <!-- Game over -->
