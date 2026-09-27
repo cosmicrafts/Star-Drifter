@@ -241,6 +241,7 @@ function startBattle(who, foeKey, stance, script) {
     if (script.shield != null) enemy.sh = enemy.maxSh = script.shield;
     if (script.noShieldRegen) enemy.sys.shields = 0; // tutorial: no infinite regen vs 1-dmg lasers
     if (script.weapons) enemy.weapons = script.weapons.map(mkWeapon);
+    if (script.sys) Object.assign(enemy.sys, script.sys); // tutorial: pin engines so there is no evade-roll stall
     if (script.parleyLong) B.parleyTicks = 20;
     if (script.ambush) { // they caught you cold: real hull damage so the repair lesson matters
       player.hull = Math.max(15, player.hull - script.ambush);
@@ -313,9 +314,9 @@ function battleTick() {
   if (B.tick % 2 === 0) crewAI(B.enemy);
   // enemy morale: weak non-zealots surrender or flee (scripted tutorial fights always finish)
   const foe = B.enemy;
-  if (!B.surrenderOffered && !(B.script && B.script.noSurrender) && foe.hull <= foe.maxHull * 0.35 && foe.hull > 0) {
+  if (!B.surrenderOffered && !(B.script && B.script.noSurrender) && foe.hull <= foe.maxHull * ((B.script && B.script.surrenderAt) || 0.35) && foe.hull > 0) {
     B.surrenderOffered = true;
-    if (B.stance !== 'hostile' || Math.random() < 0.5) {
+    if ((B.script && B.script.surrenderSure) || B.stance !== 'hostile' || Math.random() < 0.5) {
       B.paused = true;
       blog('🏳️ They offer surrender! Accept loot or finish them.');
       paintBattle();
@@ -522,7 +523,7 @@ function bTalk(mode) {
       codecSay({ ...SPEAKERS.pirate, text: 'You dare? Weapons free!' });
     }
   } else if (mode === 'accept') {
-    const loot = [Math.floor(B.enemy.maxHull / 6), Math.floor(B.enemy.maxHull / 2), 0];
+    const loot = (B.script && B.script.loot) || [Math.floor(B.enemy.maxHull / 6), Math.floor(B.enemy.maxHull / 2), 0];
     blog(`🏳️ Surrender accepted. +${loot[0]} fuel, +${loot[1]} scrap.`);
     const sd = { title: 'Surrender Accepted', desc: 'They jettison cargo and limp away.', choices: [{ t: 'Take it', req: {}, loot, out: [['Cargo secured.', loot]] }] };
     G.activeEvent = sd;
@@ -726,9 +727,10 @@ function choiceRect(txt) {
   return null;
 }
 // ---------- scripted opening chain: every run teaches the same beats, in order ----------
-// 9 fixed nodes in a line; each forces its content (no RNG) so the finger can
+// 11 fixed nodes in a line; each forces its content (no RNG) so the finger can
 // walk the player through: trade -> fight -> repair -> anomaly -> negotiate ->
-// break guns + flee -> refuel -> mining -> gamble. Then the procedural map opens.
+// break guns + flee -> refuel -> mining -> distress trap + surrender ->
+// sell charts -> gamble. Then the procedural map opens.
 const CHAIN = [
   { type: 'Empty', name: 'First Drift', ev: 'merchant', pick: 0 },
   { type: 'Combat', name: 'Pirate Ambush', battle: { who: 'pirates', foe: 'scout', stance: 'hostile', hull: 4, shield: 0, weapons: ['laser'], ambush: 30, loot: [3, 14, 0], drop: 'ion', noSurrender: true, noEscape: true } },
@@ -738,9 +740,11 @@ const CHAIN = [
   { type: 'Combat', name: 'Drone Swarm', battle: { who: 'combat', foe: 'drone', stance: 'hostile', hull: 40, shield: 1, weapons: ['laser'], fleeSure: true, sureSysHit: true, noShieldRegen: true } },
   { type: 'Station', name: 'Fuel Depot', ev: 'station', pick: 0 },
   { type: 'AsteroidField', name: 'Broken Belt', ev: 'mining', pick: 0 },
+  { type: 'Distress', name: 'Derelict Hulk', ev: 'distress', pick: 0, trapSure: true, battle: { hull: 10, shield: 0, weapons: ['laser'], sys: { engines: 0 }, surrenderSure: true, surrenderAt: 0.6, noEscape: true, loot: [3, 12, 0] } },
+  { type: 'Station', name: 'Refuge Station', ev: 'station', pick: 0 },
   { type: 'CelestialSite', name: 'Ancient Ruins', ev: 'celestial', pick: 0, last: true },
 ];
-const CHAIN_DXY = [[240, -60], [230, 120], [250, -110], [230, 60], [240, -130], [230, 130], [250, -90], [230, 110], [250, -70]];
+const CHAIN_DXY = [[240, -60], [230, 120], [250, -110], [230, 60], [240, -130], [230, 130], [250, -90], [230, 110], [240, 80], [230, -120], [250, 70]];
 const mapClear = () => G.screen === 'play' && !G.scene && !G.camAnim && !B && !G.activeEvent;
 const jumpStep = i => ({
   key: 'j' + i, when: () => G.chain && G.chainStep === i && mapClear(),
@@ -801,7 +805,21 @@ const TUT = [
     label: () => 'Mine carefully', pos: () => choiceRect('Mine carefully'),
     complete: () => !G.activeEvent },
   jumpStep(8),
-  { key: 'e-commune', when: () => G.chain && G.chainStep === 9 && G.activeEvent && !B,
+  { key: 'e-help', when: () => G.chain && G.chainStep === 9 && G.activeEvent && !B,
+    label: () => 'Answer the call', pos: () => choiceRect('Answer'),
+    complete: () => !G.activeEvent },
+  { key: 's-accept', when: () => G.chain && G.chainStep === 9 && B && B.surrenderOffered,
+    label: () => 'Accept surrender', pos: () => choiceRect('Accept'),
+    complete: () => !B || B.over || !B.paused }, // 'No mercy' resumes the fight and clears the step
+  { key: 's-loot', when: () => G.chain && G.chainStep === 9 && !B && G.activeEvent,
+    label: () => 'Take their cargo', pos: () => choiceRect('Take'),
+    complete: () => !G.activeEvent },
+  jumpStep(9),
+  { key: 'e-sell', when: () => G.chain && G.chainStep === 10 && G.activeEvent && !B,
+    label: () => 'Charts are money', pos: () => choiceRect('Sell charts'),
+    complete: () => !G.activeEvent },
+  jumpStep(10),
+  { key: 'e-commune', when: () => G.chain && G.chainStep === 11 && G.activeEvent && !B,
     label: () => 'Risk it: commune', pos: () => choiceRect('Commune'),
     complete: () => !G.activeEvent },
 ];
@@ -1029,7 +1047,7 @@ function drawEnv(node, t) {
 
 function beginEncounter(node) {
   const sc = node.script; // scripted tutorial node: fixed content, no RNG
-  if (sc && sc.battle) {
+  if (sc && sc.battle && !sc.ev) { // arrival-fight nodes only; distress keeps its event first
     const sector = (SECTOR_STAGE[node.type] ? SECTOR_STAGE[node.type](node) : []);
     const bt = sc.battle; // exactly ONE enemy on screen: the one you are fighting
     const kind = bt.who === 'patrol' ? 'patrol' : bt.who === 'combat' ? 'drone' : 'pirate';
@@ -1264,9 +1282,9 @@ function choose(i) {
     return startBattle(who, pickFoe(who, danger, G.rng), stance);
   }
   // faction shortcuts: fixed good outcome, no gamble
-  if (c.maybeTrap && G.rng() < 0.35) {
+  if (c.maybeTrap && ((G.script && G.script.trapSure) || G.rng() < 0.35)) {
     G.activeEvent = null;
-    return startBattle('trap', 'scout', 'hostile');
+    return startBattle('trap', 'scout', 'hostile', G.script && G.script.battle); // tutorial: the trap is the lesson
   }
   let pick = null;
   if (c.webes && G.faction.id === 'webes') pick = 0;
