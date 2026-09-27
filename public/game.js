@@ -280,10 +280,8 @@ function startBattle(who, foeKey, stance, script) {
   window.__sd.battle = B;
 }
 function blog(msg) {
-  B.log.unshift(`<div>t${B.tick} · ${msg}</div>`);
+  B.log.unshift(`<div>t${B.tick} · ${msg}</div>`); // in-memory only; the codec is the UI
   if (B.log.length > 30) B.log.pop();
-  const el = document.getElementById('b-log');
-  if (el) el.innerHTML = B.log.join('');
 }
 function chargeRate(ship) {
   return 0.6 * (ship.manning ? 1.35 : 1) * (ship.sys.weapons > 0 ? 1 : 0.4); // 2: seconds per tick (600ms), not 1
@@ -1075,7 +1073,6 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const menuEl = document.getElementById('menu');
 const overEl = document.getElementById('over');
-const modalEl = document.getElementById('modal');
 const hudEl = document.getElementById('hud');
 let W = 0, H = 0;
 function resize() {
@@ -1223,7 +1220,6 @@ function startRun(faction) {
   menuEl.classList.add('hidden');
   overEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
-  hideModal();
   paintHUD();
   banner('DRIFT BEGUN <small>CLICK A CONNECTED NODE · 1 FUEL PER JUMP</small>');
 }
@@ -1263,7 +1259,6 @@ function choose(i) {
       const gift = who === 'patrol' ? [3, 4, 0] : [2, 6, 0];
       applyDelta(gift);
       paintHUD();
-      hideModal();
       return banner(`FRIENDLY CONTACT · +${gift[0]} FUEL +${gift[1]} SCRAP`);
     }
     return startBattle(who, pickFoe(who, danger, G.rng), stance);
@@ -1328,7 +1323,6 @@ function gameOver(reason) {
   G.screen = 'over';
   G.tut.cur = null;
   fingerEl.classList.add('hidden');
-  hideModal();
   const score = G.jumps * 10 + G.scrap + G.kills * 5;
   if (score > G.best) { G.best = score; localStorage.setItem('sd-best', String(score)); }
   document.getElementById('over-title').textContent = reason;
@@ -1338,7 +1332,6 @@ function gameOver(reason) {
 }
 
 // ---------- hud ----------
-function hideModal() { modalEl.classList.add('hidden'); }
 function paintHUD() {
   const hullPct = Math.round(100 * G.hull / G.maxHull);
   const fuelPct = Math.round(100 * G.fuel / 100);
