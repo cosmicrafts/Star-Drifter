@@ -716,7 +716,7 @@ function choiceRect(txt) {
 // walk the player through: trade -> fight -> repair -> negotiate -> break+flee -> refuel -> gamble.
 const CHAIN = [
   { type: 'Empty', name: 'First Drift', ev: 'merchant', pick: 0 },
-  { type: 'Combat', name: 'Pirate Ambush', battle: { who: 'pirates', foe: 'scout', stance: 'hostile', hull: 14, shield: 0, weapons: ['laser'], loot: [3, 14, 0], drop: 'ion', noSurrender: true, noEscape: true } },
+  { type: 'Combat', name: 'Pirate Ambush', battle: { who: 'pirates', foe: 'scout', stance: 'hostile', hull: 3, shield: 0, weapons: ['laser'], loot: [3, 14, 0], drop: 'ion', noSurrender: true, noEscape: true } },
   { type: 'Station', name: 'Repair Dock', ev: 'station', pick: 0 },
   { type: 'Nebula', name: 'Silent Signal', battle: { who: 'patrol', foe: 'scout', stance: 'parley', hull: 16, shield: 1, weapons: ['laser'], parleyLong: true, demandSure: true, loot: [3, 10, 0] } },
   { type: 'Combat', name: 'Drone Swarm', battle: { who: 'combat', foe: 'drone', stance: 'hostile', hull: 40, shield: 1, weapons: ['laser'], fleeSure: true } },
@@ -795,7 +795,7 @@ function tutTick() {
     if (!s || s.complete()) {
       if (s) {
         T.done.add(s.key);
-        if (s.key === 'b1-fire' && B && !B.over) { B.player.autofire = true; paintBattle(); } // never stall the demo fight
+        if (s.key === 'b1-fire' && B && !B.over && !B.player.autofire) bAuto(); // fire the volley, snap back to AUTO with visible notice
       }
       T.cur = null;
       fingerEl.classList.add('hidden');
@@ -1006,8 +1006,11 @@ function beginEncounter(node) {
   const sc = node.script; // scripted tutorial node: fixed content, no RNG
   if (sc && sc.battle) {
     const sector = (SECTOR_STAGE[node.type] ? SECTOR_STAGE[node.type](node) : []);
-    G.scene.actors = G.scene.actors.concat(sector, (SCENES[sc.battle.who] || SCENES.combat)(node, sc.battle.who));
-    startBattle(sc.battle.who, sc.battle.foe, sc.battle.stance, sc.battle);
+    const bt = sc.battle; // exactly ONE enemy on screen: the one you are fighting
+    const kind = bt.who === 'patrol' ? 'patrol' : bt.who === 'combat' ? 'drone' : 'pirate';
+    const col = bt.who === 'patrol' ? '#a5b4fc' : bt.who === 'combat' ? '#e879f9' : '#f0abfc';
+    G.scene.actors = G.scene.actors.concat(sector, [mkActor(kind, node.x + 44, node.y - 12, { color: col, mirror: true })]);
+    startBattle(bt.who, bt.foe, bt.stance, bt);
     return;
   }
   let key = sc ? sc.ev : SECTOR_EVENT[node.type];
