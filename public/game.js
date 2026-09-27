@@ -165,7 +165,7 @@ function randomEvent(rng, danger) {
   return 'patrol';
 }
 
-// ---------- FTL battle MVP: ships, auto-crew, stances, negotiation ----------
+// ---------- real-time battle: ships, auto-crew, stances, negotiation ----------
 const WEAPONS = {
   laser: { name: 'Laser', dmg: 1, sys: 1, cd: 4, color: '#7dd3fc' },
   missile: { name: 'Missile', dmg: 3, sys: 2, cd: 7, ammo: 3, color: '#fb923c' },
