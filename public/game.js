@@ -178,7 +178,7 @@ const FOES = {
   drone: { name: 'Rogue Drone', hull: 9, shield: 0, weapons: ['ion', 'laser'], loot: [1, 6, 3], crew: 0 },
 };
 const CREW_NAMES = ['Rook', 'Vex', 'Sable', 'Ivo', 'Nyx', 'Pip'];
-const SYS_LABEL = { weapons: 'WPN', engines: 'ENG', shields: 'SHD' };
+const SYS_LABEL = { weapons: 'GUNS', engines: 'ENGINES', shields: 'SHIELDS' };
 let B = null; // battle state
 function mkWeapon(key) {
   const w = WEAPONS[key];
@@ -451,6 +451,8 @@ function bTarget() {
   B.player.target = order[(order.indexOf(B.player.target) + 1) % 3];
   blog(`🎯 Targeting ${SYS_LABEL[B.player.target]}.`);
   paintBattle();
+  const els = document.querySelectorAll('#codec-choices .btn'); // button must follow the box, no stale label
+  if (els[1]) els[1].innerHTML = `<b>2. 🎯 ${SYS_LABEL[B.player.target]}</b>`;
 }
 // toggle autofire: off = weapons hold at full charge; click your ship again to fire the volley
 function bAuto() {
@@ -568,7 +570,7 @@ function paintBattle() {
     ] });
   } else {
     // real orders: fire control matters, click ships for target/volley
-    codecSay({ ...SPEAKERS.self, text: battleStatusText() + ' — 🎯 click enemy ship to refocus', choices: [
+    codecSay({ ...SPEAKERS.self, text: battleStatusText() + ' — click the enemy ship to change what you hit', choices: [
       { t: B.player.autofire ? '⚙ AUTO-FIRE: ON' : '✋ MANUAL — click to FIRE', primary: !B.player.autofire, fn: () => bAuto() },
       { t: `🎯 ${SYS_LABEL[B.player.target]}`, fn: () => bTarget() },
       { t: '💨 Flee', fn: () => bFlee() },
@@ -701,6 +703,11 @@ function foeActor() {
   if (!B || !G.scene) return null;
   return G.scene.actors.find(a => a.hp === B.enemy) || null;
 }
+function foePos() { // aim above the ship so the label never covers the SHOOT AT row
+  const p = actorScreen(foeActor());
+  if (p) p.y -= 34;
+  return p;
+}
 function firstChoiceRect() {
   const els = document.querySelectorAll('#codec-choices .btn');
   for (const el of els) {
@@ -761,7 +768,7 @@ const TUT = [
     complete: () => !G.activeEvent },
   jumpStep(1),
   { key: 'b1-aim', when: () => G.chain && G.chainStep === 2 && B && !B.over,
-    label: () => 'Tap enemy: aim', pos: () => actorScreen(foeActor()),
+    label: () => 'Tap enemy: aim', pos: () => foePos(),
     setup: () => { G.tut.snapTarget = B.player.target; },
     complete: () => !B || B.over || B.player.target !== G.tut.snapTarget },
   { key: 'b1-fire', when: () => G.chain && G.chainStep === 2 && B && !B.over,
@@ -788,8 +795,10 @@ const TUT = [
     complete: () => !G.activeEvent },
   jumpStep(5),
   { key: 'b2-guns', when: () => G.chain && G.chainStep === 6 && B && !B.over,
-    label: () => 'Break their guns', pos: () => actorScreen(foeActor()),
-    complete: () => !B || B.over || B.enemy.sys.weapons < 2 },
+    label: () => 'Break their guns', pos: () => foePos(),
+    setup: () => { B.player.target = 'weapons'; G.tut.snapSys = Object.assign({}, B.enemy.sys); },
+    complete: () => !B || B.over || ['weapons', 'engines', 'shields'].some(s => B.enemy.sys[s] < G.tut.snapSys[s]), // any system you broke counts: never stuck on a misclick
+  },
   { key: 'b2-flee', when: () => G.chain && G.chainStep === 6 && B && !B.over,
     label: () => 'Flee: costs 2 fuel', pos: () => choiceRect('Flee'),
     complete: () => !B || B.over },
@@ -1765,14 +1774,14 @@ function drawActorBar(a) {
     ctx.textAlign = 'center';
     ctx.fillStyle = 'rgba(248,113,113,0.85)';
     ctx.font = 'bold 9px sans-serif';
-    ctx.fillText('▼ TARGET', ax - 60, rowY);
-    ctx.font = '10px sans-serif';
+    ctx.fillText('▼ SHOOT AT', ax, rowY - 16);
+    ctx.font = 'bold 9px sans-serif';
     for (let i = 0; i < labels.length; i++) {
-      const lx = ax - 8 + i * 34;
+      const lx = ax + (i - 1) * 62;
       const hot = Bx.player.target === labels[i];
-      if (hot) { // reticle on the selected system only
+      if (hot) { // box around the selected system — reads as "this is what you hit"
         ctx.strokeStyle = '#f87171'; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(lx, rowY - 3, 13, 0, TAU); ctx.stroke();
+        ctx.strokeRect(lx - 27, rowY - 10, 54, 15);
       }
       ctx.fillStyle = hot ? '#f87171' : 'rgba(148,163,184,0.55)';
       ctx.fillText(SYS_LABEL[labels[i]], lx, rowY + 1);
